@@ -18,7 +18,7 @@
 
 #define eps                         0.00001
 
-#define RACECAR_VERSION             "1.4"
+#define RACECAR_VERSION             "1.5"
 
 #define STACK_SIZE_CORE2            30000
 
@@ -229,6 +229,7 @@ extern volatile int steerServo, leftEscs, rightEscs;
 extern int speed_input, steer_input, leftSpeedSteer, rightSpeedSteer;
 extern int lowVoltageAlarmCount;
 extern bool mpu_6050_found;
+extern bool hasGPSSensor;
 extern bool hasCurrentSensor;
 extern DrivingMode drivingMode;
 extern NeoPixelBus<PIXEL_COLOR_FEATURE, PIXEL_T_METHOD> *strip;
@@ -253,6 +254,7 @@ const uint8_t BLUE_RACECAR[UniqueIDsize] = {0x24, 0x0A, 0xC4, 0xC6, 0x57, 0xD0};
 const uint8_t ORANGE_RACECAR[UniqueIDsize] = {0x24, 0x62, 0xAB, 0xD7, 0x74, 0x7C};
 const uint8_t GREEN_RACECAR[UniqueIDsize] = {0x24, 0x62, 0xAB, 0xD5, 0x21, 0x18};
 const uint8_t RED_RACECAR[UniqueIDsize] = {0xF0, 0x08, 0xD1, 0xD2, 0x7C, 0xAC};
+const uint8_t GO_KART[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF1, 0x97, 0x74};
 
 
 #define colorSaturation 128
@@ -379,6 +381,7 @@ extern double toDegrees(double prmRadians);
 extern String getSSID();
 extern void playShortBeep();
 extern unsigned int getNrOfLEDStrips();
+extern boolean getHasGPSSensor();
 extern boolean getHasCurrentSensor();
 extern DrivingMode getDefaultDrivingMode();
 extern int fixChannelDirection(int prmChannel, boolean prmReversed);

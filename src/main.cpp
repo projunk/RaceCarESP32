@@ -190,7 +190,7 @@ void setup() {
 
 void loop() {
   voltage = LowPassFilter(VOLTAGE_NOICE_FILTER, readVoltage(), voltage);
-  current = LowPassFilter(CURRENT_NOICE_FILTER, readCurrent(), current);
+  current = LowPassFilter(CURRENT_NOICE_FILTER, readCurrent(), current);  
   getGPSData();
   vTaskDelay(1);
 }

@@ -16,6 +16,7 @@ volatile unsigned long signal_micros_timer_value;
 volatile int steerServo, leftEscs, rightEscs;
 int speed_input, steer_input, leftSpeedSteer, rightSpeedSteer;
 bool mpu_6050_found = false;
+bool hasGPSSensor;
 bool hasCurrentSensor;
 DrivingMode drivingMode;
 NeoPixelBus<PIXEL_COLOR_FEATURE, PIXEL_T_METHOD> *strip;
@@ -284,6 +285,8 @@ String identifyRobot() {
     return "Green";
   } else if (isEqualID(RED_RACECAR)) {    
     return "Red";
+  } else if (isEqualID(GO_KART)) {    
+    return "Go-Kart";
   } else {
     return "Unknown";
   }
@@ -315,8 +318,31 @@ unsigned int getNrOfLEDStrips() {
     return 1;
   } else if (isEqualID(RED_RACECAR)) {
     return 1;
+  } else if (isEqualID(GO_KART)) {
+    return 1;
   } else {
     return 0;
+  }
+}
+
+
+boolean getHasGPSSensor() {
+  if (isEqualID(BREADBOARD_RACECAR)) {
+    return true;
+  } else if (isEqualID(MAGENTA_RACECAR)) {
+    return true;
+  } else if (isEqualID(BLUE_RACECAR)) {
+    return true;
+  } else if (isEqualID(ORANGE_RACECAR)) {
+    return true;
+  } else if (isEqualID(GREEN_RACECAR)) {
+    return true;
+  } else if (isEqualID(RED_RACECAR)) {
+    return true;
+  } else if (isEqualID(GO_KART)) {
+    return false;
+  } else {
+    return false;
   }
 }
 
@@ -333,6 +359,8 @@ boolean getHasCurrentSensor() {
   } else if (isEqualID(GREEN_RACECAR)) {
     return false;
   } else if (isEqualID(RED_RACECAR)) {
+    return false;
+  } else if (isEqualID(GO_KART)) {
     return false;
   } else {
     return false;
@@ -352,6 +380,8 @@ DrivingMode getDefaultDrivingMode() {
   } else if (isEqualID(GREEN_RACECAR)) {
     return dmHalfSpeed;
   } else if (isEqualID(RED_RACECAR)) {
+    return dmHalfSpeed;
+  } else if (isEqualID(GO_KART)) {
     return dmHalfSpeed;
   } else {
     return dmFullSpeed;
@@ -959,6 +989,8 @@ void print_calculated_values() {
 
 
 void getGPSData() {
+  if (!hasGPSSensor) return;
+
   while (hs.available() > 0) {
     bool positionIsAccurate = false;
     if (gps.encode(hs.read()))

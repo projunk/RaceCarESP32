@@ -22,6 +22,7 @@ void setup2() {
     calibrate_mpu_6050();
   }
 
+  hasGPSSensor = getHasGPSSensor();
   hasCurrentSensor = getHasCurrentSensor();
   drivingMode = getDefaultDrivingMode();
 
