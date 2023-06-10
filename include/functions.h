@@ -18,14 +18,20 @@
 
 #define eps                         0.00001
 
-#define RACECAR_VERSION             "1.5"
+#define RACECAR_VERSION             "1.7"
 
-#define STACK_SIZE_CORE2            30000
+// CORE0 is used by WIFI
+#define CORE0                       0
+#define CORE1                       1
+
+#define STACK_SIZE_CORE             4096
 
 #define FORMAT_SPIFFS_IF_FAILED     true
 
-#define LOOP_TIME                   4000   // microseconds; 250Hz
-#define LOOP_TIME_HZ                (1000000.0/LOOP_TIME)
+#define LOOP_TIME_TASK1             40000    // microseconds; 25Hz
+#define LOOP_TIME_TASK2             10000    // microseconds; 100Hz
+#define LOOP_TIME_TASK3             4000     // microseconds; 250Hz
+#define LOOP_TIME_TASK4             10000    // microseconds; 100Hz
 
 #define NR_OF_RECEIVER_CHANNELS     3
 
@@ -50,6 +56,7 @@
 #define HALF_SPEED_DELTA_SIGNAL   250
 #define MIN_VALID_SIGNAL_VALUE    750
 #define MAX_VALID_SIGNAL_VALUE    2250
+#define SIGNALS_COUNT_THRESHOLD   20 
 
 #define MIN_GYRO                  -6000
 #define MAX_GYRO                  6000
@@ -64,6 +71,7 @@
 
 #define MIN_STEER_FACTOR          0.1
 
+#define SPEEDOMETER_MAX_SPEED     100
 
 #define PWM_FREQUENCY_SERVO       50
 #define PWM_RESOLUTION_SERVO      12
@@ -100,13 +108,17 @@
 
 #define SSID_BASE                 "RACECAR_ESP32_"
 
+#define NAME_TAB_SPEEDOMETER        "Speedo"
 #define NAME_TAB_TELEMETRY          "Telemetry"
 #define NAME_TAB_GPS                "GPS"
 #define NAME_TAB_SETTINGS           "Settings"
 
+#define NAME_TAB_BUTTON_SPEEDOMETER "BTN_" NAME_TAB_SPEEDOMETER
 #define NAME_TAB_BUTTON_TELEMETRY   "BTN_" NAME_TAB_TELEMETRY
 #define NAME_TAB_BUTTON_GPS         "BTN_" NAME_TAB_GPS
 #define NAME_TAB_BUTTON_SETTINGS    "BTN_" NAME_TAB_SETTINGS 
+
+#define NAME_SPEEDOMETER_GAUGE      "SpeedoMeterGauge"
 
 #define NAME_MODEL                  "Model"
 #define NAME_VERSION                "Version"
@@ -120,7 +132,10 @@
 #define NAME_VOLTAGE_PROGRESS       "Voltage"
 #define NAME_CURRENT                "Current [A]"
 #define NAME_CURRENT_PROGRESS       "Current"
-#define NAME_USED_UP_LOOPTIME       "Used up Looptime [us]"
+#define NAME_USED_UP_LOOPTIME_PROGRESS_1 "Used up Looptime task 1 [us]"
+#define NAME_USED_UP_LOOPTIME_PROGRESS_2 "Used up Looptime task 2 [us]"
+#define NAME_USED_UP_LOOPTIME_PROGRESS_3 "Used up Looptime task 3 [us]"
+#define NAME_USED_UP_LOOPTIME_PROGRESS_4 "Used up Looptime task 4 [us]"
 #define NAME_GYRO_X                 "gyro_x"
 #define NAME_GYRO_Y                 "gyro_y"
 #define NAME_GYRO_Z                 "gyro_z"
@@ -196,6 +211,18 @@
 #define ID_SPAN_PROGRESS_CHANNEL_1  "progressSpanID_ch1"
 #define ID_SPAN_PROGRESS_CHANNEL_2  "progressSpanID_ch2"
 #define ID_SPAN_PROGRESS_CHANNEL_3  "progressSpanID_ch3"
+#define ID_PROGRESS_LOOPTIME_1      "progressID_looptime1"
+#define ID_PROGRESS_LOOPTIME_2      "progressID_looptime2"
+#define ID_PROGRESS_LOOPTIME_3      "progressID_looptime3"
+#define ID_PROGRESS_LOOPTIME_4      "progressID_looptime4"
+#define ID_SPAN_PROGRESS_LOOPTIME_1 "progressSpanID_looptime1"
+#define ID_SPAN_PROGRESS_LOOPTIME_2 "progressSpanID_looptime2"
+#define ID_SPAN_PROGRESS_LOOPTIME_3 "progressSpanID_looptime3"
+#define ID_SPAN_PROGRESS_LOOPTIME_4 "progressSpanID_looptime4"
+
+#define ID_BUZZER_BUTTON            "buzzerButtonID"
+
+#define INVISIBLE_STYLE             "style=\"display: none;\""
 
 #define WEBPAGE_REFRESH_INTERVAL    "250"
 #define WEBPAGE_TIMEOUT             "200"
@@ -207,12 +234,14 @@ enum DrivingMode {
 };
 
 
-extern volatile long usedUpLoopTime;
+extern volatile unsigned long usedUpLoopTimeTask1, usedUpLoopTimeTask2, usedUpLoopTimeTask3, usedUpLoopTimeTask4;
 extern volatile int channel[];
 extern volatile int prevAuxChannel;
 extern volatile unsigned long timer_1, timer_2, timer_3;
 extern volatile bool signal_detected, prev_signal_detected;
+extern volatile bool is_armed;
 extern volatile float voltage, current;
+extern volatile int nrOfCells;
 extern volatile short gyro_x, gyro_y, gyro_z;
 extern volatile short acc_x, acc_y, acc_z;
 extern volatile short temperature;
@@ -241,6 +270,7 @@ extern double maxSpeed;
 extern double totalDistance;
 
 extern volatile bool buzzerDisabled;
+extern volatile bool buzzerOff;
 extern volatile double steerExpoFactor;
 extern volatile int steerServoCenterOffset;
 extern volatile int speedEscCenterOffset;
@@ -248,13 +278,14 @@ extern volatile double voltageCorrectionFactor;
 extern volatile double currentCorrectionFactor;
 
 
+
 const uint8_t BREADBOARD_RACECAR[UniqueIDsize] = {0xF0, 0x08, 0xD1, 0xD2, 0x7F, 0x3C};
-const uint8_t MAGENTA_RACECAR[UniqueIDsize] = {0x98, 0xF4, 0xAB, 0x68, 0xF4, 0xF0};
-const uint8_t BLUE_RACECAR[UniqueIDsize] = {0x24, 0x0A, 0xC4, 0xC6, 0x57, 0xD0};
-const uint8_t ORANGE_RACECAR[UniqueIDsize] = {0x24, 0x62, 0xAB, 0xD7, 0x74, 0x7C};
 const uint8_t GREEN_RACECAR[UniqueIDsize] = {0x24, 0x62, 0xAB, 0xD5, 0x21, 0x18};
 const uint8_t RED_RACECAR[UniqueIDsize] = {0xF0, 0x08, 0xD1, 0xD2, 0x7C, 0xAC};
-const uint8_t GO_KART[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF1, 0x97, 0x74};
+const uint8_t GO_KART_PRUSA[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF1, 0x97, 0x74};
+const uint8_t GO_KART_PROJUNK[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF1, 0xC8, 0xA8};
+const uint8_t GO_KART_ROENIE[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF0, 0x89, 0x98};
+const uint8_t GO_KART_THOMIE[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF9, 0xFB, 0x7C};
 
 
 #define colorSaturation 128
@@ -362,7 +393,6 @@ extern GYROAxis acc_roll;
 extern GYROAxis acc_pitch;
 extern GYROAxis acc_yaw;
 
-
 extern double LowPassFilter(const double prmAlpha, const double prmCurrentValue, const double prmPreviousValue);
 extern double checkExpo(const double prmExpoFactor);
 extern int checkCenterOffset(const int prmCenterOffset);
@@ -395,8 +425,8 @@ extern double calcDegreesPerSecond(double prmGyroAxisInput, double prmGyroAxis);
 extern void calibrateAcc();
 extern void calcAngles();
 extern double calcPidSetPoint(int prmChannel, double prmLevelAdjust);
-extern void delayEx(uint32_t prmMilisec);
 extern int limitServo(int prmPulse);
+extern void checkIsArmed();
 extern bool isArmed();
 extern void initValues();
 extern void playCalibrate();
@@ -417,6 +447,7 @@ extern float readVoltage();
 extern String getVoltageStr();
 extern float readCurrent();
 extern String getCurrentStr();
+extern int getSpeed();
 extern void incDrivingMode();
 extern void playDrivingMode();
 extern void initLEDs();
@@ -424,13 +455,19 @@ extern void updateLEDs();
 extern void print_signals();
 extern void print_calculated_values();
 extern uint8_t* getChannelWithStrongestSignal(String prmSSID, int32_t *prmStrongestChannel);
-extern void runOnCore2(void *parameter);
+extern void task1(void *parameter);
+extern void task2(void *parameter);
+extern void task3(void *parameter);
+extern void task4(void *parameter);
 extern void getGPSData();
 extern String getIdFromName(String prmName);
 extern bool isAPStarted();
 extern void WiFiAPStarted(WiFiEvent_t event, WiFiEventInfo_t info);
 extern String getWebPage(String prmToBeClickedTabButton);
 extern String getLatestData();
+
+extern String getSpeedoMeterStyle();
+extern String getSpeedoMeterFunctions();
 
 
 #endif

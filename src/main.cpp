@@ -1,11 +1,10 @@
 #include <functions.h>
-#include <ESPAsyncWebServer.h>
-#include <AsyncTCP.h>
+#include <WebServer.h>
 
 
-TaskHandle_t core2;
+TaskHandle_t handle_task1, handle_task2, handle_task3, handle_task4;
 
-IPAddress ip(192, 168, 1, 170);
+IPAddress ip(192,168,1,170);
 IPAddress gateway(192,168,1,1);
 IPAddress subnet(255,255,255,0);
 String ssid = WIFI_SSID;
@@ -17,9 +16,116 @@ IPAddress AP_subnet(255,255,255,0);
 const char* AP_password = "123gps456";
 const uint8_t AP_channel = 13;
 
-AsyncWebServer server(80);
+WebServer server(80);
 
 String activeTab = NAME_TAB_BUTTON_TELEMETRY;
+
+#define REDIRECT_TO_ROOT server.sendHeader("Location", "/", true); server.send(302, "text/plain", "");
+
+
+
+void getWebPageHandler() {
+  server.send(200, "text/html", getWebPage(activeTab)); 
+}
+
+
+void saveHandler() {
+  Serial.println("/Save");
+    
+  yawPID.set(server.arg("Yaw1"), server.arg("Yaw2"), server.arg("Yaw3"), server.arg("Yaw4"));
+  yawPID.print();    
+  yawPID.save();
+
+  steerExpoFactor = checkExpo(server.arg(getIdFromName(NAME_STEER_EXPO)).toDouble());
+  steerServoCenterOffset = checkCenterOffset(server.arg(getIdFromName(NAME_STEER_SERVO_CENTER_OFFSET)).toInt());
+  speedEscCenterOffset = checkCenterOffset(server.arg(getIdFromName(NAME_SPEED_ESC_CENTER_OFFSET)).toInt());
+  voltageCorrectionFactor = server.arg(getIdFromName(NAME_VOLTAGE_CORRECTION)).toDouble();
+  currentCorrectionFactor = server.arg(getIdFromName(NAME_CURRENT_CORRECTION)).toDouble();
+  calibrated_angle_roll_acc = server.arg(getIdFromName(NAME_CALIBRATED_ROLL_ANGLE)).toDouble();
+  calibrated_angle_pitch_acc = server.arg(getIdFromName(NAME_CALIBRATED_PITCH_ANGLE)).toDouble();
+  printProps();
+  saveProps();
+
+  yawOutputPID.reset();
+
+  activeTab = NAME_TAB_BUTTON_SETTINGS;
+  
+  REDIRECT_TO_ROOT;
+}
+
+
+void cancelHandler() {
+  Serial.println("/Cancel");
+  activeTab = NAME_TAB_BUTTON_SETTINGS;
+  REDIRECT_TO_ROOT;
+}  
+
+
+void calibrateAccHandler() {
+  Serial.println("/CalibrateAcc");
+  calibrateAcc();
+  saveProps();
+  activeTab = NAME_TAB_BUTTON_SETTINGS;
+  REDIRECT_TO_ROOT;
+}  
+
+
+void wifiOffHandler() {
+  Serial.println("/WifiOff");
+  WiFi.mode(WIFI_OFF);
+}  
+
+
+void buzzerOnOffHandler() {
+  Serial.println("/BuzzerOnOff");
+  buzzerOff = ! buzzerOff;
+  activeTab = NAME_TAB_BUTTON_SETTINGS;
+  REDIRECT_TO_ROOT;
+}  
+
+
+void defaultsHandler() {
+  Serial.println("/Defaults");
+    
+  yawPID.resetToDefault();
+  yawPID.print();    
+  yawPID.save();
+
+  steerExpoFactor = defaultSteerExpoFactor;
+  steerServoCenterOffset = defaultSteerServoCenterOffset;
+  speedEscCenterOffset = defaultSpeedEscCenterOffset;
+  voltageCorrectionFactor = defaultVoltageCorrectionFactor;
+  currentCorrectionFactor = defaultCurrentCorrectionFactor;
+  calibrated_angle_roll_acc = defaultCalibratedRollAngleAcc;
+  calibrated_angle_pitch_acc = defaultCalibratedPitchAngleAcc;    
+  printProps();
+  saveProps();
+
+  yawOutputPID.reset();
+
+  activeTab = NAME_TAB_BUTTON_SETTINGS;
+  REDIRECT_TO_ROOT;  
+};    
+
+void zeroHandler() {
+  Serial.println("/Zero");
+
+  maxSpeed = 0.0;
+  totalDistance = 0.0;
+
+  activeTab = NAME_TAB_BUTTON_GPS;
+  REDIRECT_TO_ROOT;
+};  
+
+
+void getLatestDataHandler() {
+  server.send(200, "text/html", getLatestData()); 
+}
+
+
+void notFoundHandler() {
+  server.send(404, "text/plain", "Not found");
+}
 
 
 void setup() {
@@ -42,15 +148,42 @@ void setup() {
     Serial.println("SPIFFS Mount Failed");
   }
 
-  // start second core
+  // start tasks second core
   xTaskCreatePinnedToCore(
-    runOnCore2,
-    "Core2",
-    STACK_SIZE_CORE2,
+    task1,
+    "task1",
+    STACK_SIZE_CORE,
     NULL,
     1,
-    &core2,
-    0);
+    &handle_task1,
+    CORE1);
+
+  xTaskCreatePinnedToCore(
+    task2,
+    "task2",
+    STACK_SIZE_CORE,
+    NULL,
+    1,
+    &handle_task2,
+    CORE1);
+
+  xTaskCreatePinnedToCore(
+    task3,
+    "task3",
+    STACK_SIZE_CORE,
+    NULL,
+    1,
+    &handle_task3,
+    CORE0);
+
+  xTaskCreatePinnedToCore(
+    task4,
+    "task4",
+    STACK_SIZE_CORE,
+    NULL,
+    1,
+    &handle_task4,
+    CORE1);
 
   int32_t strongestChannel;
   uint8_t* strongestBssid;
@@ -58,7 +191,7 @@ void setup() {
   strongestBssid = getChannelWithStrongestSignal(ssid, &strongestChannel);
   if (strongestBssid == NULL) {
     // standalone accesspoint
-    WiFi.onEvent(WiFiAPStarted, WiFiEvent_t::SYSTEM_EVENT_AP_START);
+    WiFi.onEvent(WiFiAPStarted, WiFiEvent_t::ARDUINO_EVENT_WIFI_AP_START);
 
     WiFi.mode(WIFI_AP);
     WiFi.softAP(getSSID().c_str(), AP_password, AP_channel); 
@@ -92,105 +225,32 @@ void setup() {
     Serial.println(ip);
   }
 
-  voltage = readVoltage();
-  Serial.print("Voltage [V]: ");
-  Serial.println(getVoltageStr());
-  Serial.println();
-
   Serial.println("WebServer startup");
 
-  server.on("/", WebRequestMethod::HTTP_GET, [](AsyncWebServerRequest *request) {   
-    //Serial.println("/");
-    request->send(200, "text/html", getWebPage(activeTab));
-  }); 
+  server.on("/", HTTPMethod::HTTP_GET, getWebPageHandler);   
 
-  server.on("/Save", WebRequestMethod::HTTP_GET, [](AsyncWebServerRequest *request) {
-    Serial.println("/Save");
-    yawPID.set(request->getParam("Yaw1")->value(), request->getParam("Yaw2")->value(), request->getParam("Yaw3")->value(), request->getParam("Yaw4")->value());
-    yawPID.print();    
-    yawPID.save();
+  server.on("/Save", HTTPMethod::HTTP_GET, saveHandler);
 
-    steerExpoFactor = checkExpo(request->getParam(getIdFromName(NAME_STEER_EXPO))->value().toDouble());
-    steerServoCenterOffset = checkCenterOffset(request->getParam(getIdFromName(NAME_STEER_SERVO_CENTER_OFFSET))->value().toInt());
-    speedEscCenterOffset = checkCenterOffset(request->getParam(getIdFromName(NAME_SPEED_ESC_CENTER_OFFSET))->value().toInt());
-    voltageCorrectionFactor = request->getParam(getIdFromName(NAME_VOLTAGE_CORRECTION))->value().toDouble();
-    currentCorrectionFactor = request->getParam(getIdFromName(NAME_CURRENT_CORRECTION))->value().toDouble();
-    calibrated_angle_roll_acc = request->getParam(getIdFromName(NAME_CALIBRATED_ROLL_ANGLE))->value().toDouble();
-    calibrated_angle_pitch_acc = request->getParam(getIdFromName(NAME_CALIBRATED_PITCH_ANGLE))->value().toDouble();
-    printProps();
-    saveProps();
+  server.on("/Cancel", HTTPMethod::HTTP_GET, cancelHandler);
 
-    yawOutputPID.reset();
+  server.on("/CalibrateAcc", HTTPMethod::HTTP_GET, calibrateAccHandler);
 
-    activeTab = NAME_TAB_BUTTON_SETTINGS;
-    request->redirect("/");
-  });  
+  server.on("/WifiOff", HTTPMethod::HTTP_GET, wifiOffHandler);
 
-  server.on("/Cancel", WebRequestMethod::HTTP_GET, [](AsyncWebServerRequest *request) {
-    Serial.println("/Cancel");
-    activeTab = NAME_TAB_BUTTON_SETTINGS;
-    request->redirect("/");
-  });  
+  server.on("/BuzzerOnOff", HTTPMethod::HTTP_GET, buzzerOnOffHandler);
 
-  server.on("/CalibrateAcc", WebRequestMethod::HTTP_GET, [](AsyncWebServerRequest *request) {
-    Serial.println("/CalibrateAcc");
-    calibrateAcc();
-    saveProps();
-    activeTab = NAME_TAB_BUTTON_SETTINGS;
-    request->redirect("/");
-  });  
+  server.on("/Defaults", HTTPMethod::HTTP_GET, defaultsHandler);
 
-  server.on("/WifiOff", WebRequestMethod::HTTP_GET, [](AsyncWebServerRequest *request) {
-    Serial.println("/WifiOff");
-    WiFi.mode(WIFI_OFF);
-  });  
+  server.on("/Zero", HTTPMethod::HTTP_GET, zeroHandler);
 
-  server.on("/Defaults", WebRequestMethod::HTTP_GET, [](AsyncWebServerRequest *request) {
-    Serial.println("/Defaults");
-    
-    yawPID.resetToDefault();
-    yawPID.print();    
-    yawPID.save();
+  server.on("/RequestLatestData", HTTPMethod::HTTP_GET, getLatestDataHandler);
 
-    steerExpoFactor = defaultSteerExpoFactor;
-    steerServoCenterOffset = defaultSteerServoCenterOffset;
-    speedEscCenterOffset = defaultSpeedEscCenterOffset;
-    voltageCorrectionFactor = defaultVoltageCorrectionFactor;
-    currentCorrectionFactor = defaultCurrentCorrectionFactor;
-    calibrated_angle_roll_acc = defaultCalibratedRollAngleAcc;
-    calibrated_angle_pitch_acc = defaultCalibratedPitchAngleAcc;    
-    printProps();
-    saveProps();
-
-    yawOutputPID.reset();
-
-    activeTab = NAME_TAB_BUTTON_SETTINGS;
-    request->redirect("/");
-  });    
-
-  server.on("/Zero", WebRequestMethod::HTTP_GET, [](AsyncWebServerRequest *request) {
-    Serial.println("/Zero");
-
-    maxSpeed = 0.0;
-    totalDistance = 0.0;
-
-    activeTab = NAME_TAB_BUTTON_GPS;
-    request->redirect("/");
-  });  
-
-  server.on("/RequestLatestData", WebRequestMethod::HTTP_GET, [](AsyncWebServerRequest *request) {
-  //  Serial.println("/RequestLatestData");
-    request->send(200, "application/json", getLatestData());
-  });  
+  server.onNotFound(notFoundHandler);
 
   server.begin();
-  hs.begin(9600);
 }
 
 
 void loop() {
-  voltage = LowPassFilter(VOLTAGE_NOICE_FILTER, readVoltage(), voltage);
-  current = LowPassFilter(CURRENT_NOICE_FILTER, readCurrent(), current);  
-  getGPSData();
-  vTaskDelay(1);
+  server.handleClient();
 }

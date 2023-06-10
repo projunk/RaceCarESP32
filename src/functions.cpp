@@ -2,12 +2,13 @@
 
 
 volatile bool APStarted = false;
-volatile long usedUpLoopTime;
 volatile int channel[NR_OF_RECEIVER_CHANNELS];
 volatile int prevAuxChannel;
 volatile unsigned long timer_1, timer_2, timer_3;
 volatile bool signal_detected, prev_signal_detected;
+volatile bool is_armed = false;
 volatile float voltage, current;
+volatile int nrOfCells = 0;
 volatile short gyro_x, gyro_y, gyro_z;
 volatile short acc_x, acc_y, acc_z;
 volatile short temperature = 0;
@@ -23,6 +24,7 @@ NeoPixelBus<PIXEL_COLOR_FEATURE, PIXEL_T_METHOD> *strip;
 unsigned int nrOfLEDStrips;
 String robotName;
 volatile bool buzzerDisabled = false;
+volatile bool buzzerOff = false;
 volatile double steerExpoFactor = defaultSteerExpoFactor;
 volatile int steerServoCenterOffset = defaultSteerServoCenterOffset;
 volatile int speedEscCenterOffset = defaultSpeedEscCenterOffset;
@@ -43,6 +45,8 @@ float latitude, longitude, prev_latitude, prev_longitude;
 String sat_str, date_str, time_str, lat_str, lng_str, speed_str, max_speed_str, total_distance_str;
 double maxSpeed = 0.0;
 double totalDistance = 0.0;
+
+uint32_t cp0_regs1[18], cp0_regs2[18], cp0_regs3[18]; 
 
 TinyGPSPlus gps;
 
@@ -196,6 +200,10 @@ int getExpo(const int prmInPulse, const double prmExpoFactor) {
 
 
 void IRAM_ATTR handler_channel_1() {
+  vTaskSuspendAll(); 
+  xthal_set_cpenable(1);
+  xthal_save_cp0(cp0_regs1);
+
   unsigned long timer_value = micros();
   signal_micros_timer_value = timer_value;
   if (digitalRead(RECEIVER_STEER_PIN)) {
@@ -203,10 +211,18 @@ void IRAM_ATTR handler_channel_1() {
   } else {
     channel[0] = timer_value - timer_1;
   }
+
+  xthal_restore_cp0(cp0_regs1);
+  xthal_set_cpenable(0);
+  xTaskResumeAll();
 }
 
 
 void IRAM_ATTR handler_channel_2() {
+  vTaskSuspendAll(); 
+  xthal_set_cpenable(1);
+  xthal_save_cp0(cp0_regs2);
+
   // throttle channel keeps receiving its pulse also when signal is lost
   unsigned long timer_value = micros();
   if (digitalRead(RECEIVER_THROTTLE_PIN)) {
@@ -217,16 +233,28 @@ void IRAM_ATTR handler_channel_2() {
 
   // check for signal
   signal_detected = ((timer_value - signal_micros_timer_value) < SIGNAL_TIMEOUT);
+
+  xthal_restore_cp0(cp0_regs2);
+  xthal_set_cpenable(0);
+  xTaskResumeAll();
 }
 
 
 void IRAM_ATTR handler_channel_3() {
+  vTaskSuspendAll(); 
+  xthal_set_cpenable(1);
+  xthal_save_cp0(cp0_regs3);
+
   unsigned long timer_value = micros();
   if (digitalRead(RECEIVER_SPEED_MODE_PIN)) {
     timer_3 = timer_value;
   } else {
     channel[2] = timer_value - timer_3;
   }
+
+  xthal_restore_cp0(cp0_regs3);
+  xthal_set_cpenable(0);
+  xTaskResumeAll();
 }
 
 
@@ -251,10 +279,7 @@ void armEsc() {
   writeEscPWM(MOTOR_RB_PWM_CHANNEL, ESC_ARM_SIGNAL);
   writeEscPWM(MOTOR_LF_PWM_CHANNEL, ESC_ARM_SIGNAL);
   writeEscPWM(MOTOR_RF_PWM_CHANNEL, ESC_ARM_SIGNAL);
-  unsigned long timer = micros();
-  while(micros() - timer < ESC_ARM_DELAY) {
-    rtttl::play();    
-  }
+  delayMicroseconds(ESC_ARM_DELAY);
   writeEscPWM(MOTOR_LB_PWM_CHANNEL, MID_CHANNEL);
   writeEscPWM(MOTOR_RB_PWM_CHANNEL, MID_CHANNEL);
   writeEscPWM(MOTOR_LF_PWM_CHANNEL, MID_CHANNEL);
@@ -275,18 +300,18 @@ bool isEqualID(const uint8_t prmID[UniqueIDsize]) {
 String identifyRobot() {
   if (isEqualID(BREADBOARD_RACECAR)) {
     return "Breadboard";
-  } else if (isEqualID(MAGENTA_RACECAR)) {
-    return "Magenta";
-  } else if (isEqualID(BLUE_RACECAR)) {
-    return "Blue";
-  } else if (isEqualID(ORANGE_RACECAR)) {
-    return "Orange";
   } else if (isEqualID(GREEN_RACECAR)) {
     return "Green";
   } else if (isEqualID(RED_RACECAR)) {    
     return "Red";
-  } else if (isEqualID(GO_KART)) {    
-    return "Go-Kart";
+  } else if (isEqualID(GO_KART_PRUSA)) {    
+    return "Go-Kart Prusa";
+  } else if (isEqualID(GO_KART_PROJUNK)) {    
+    return "Go-Kart Projunk";
+  } else if (isEqualID(GO_KART_ROENIE)) {    
+    return "Go-Kart Roenie";
+  } else if (isEqualID(GO_KART_THOMIE)) {    
+    return "Go-Kart Thomie";
   } else {
     return "Unknown";
   }
@@ -308,17 +333,17 @@ String getSSID() {
 unsigned int getNrOfLEDStrips() {
   if (isEqualID(BREADBOARD_RACECAR)) {
     return 2;
-  } else if (isEqualID(MAGENTA_RACECAR)) {
-    return 2;
-  } else if (isEqualID(BLUE_RACECAR)) {
-    return 1;
-  } else if (isEqualID(ORANGE_RACECAR)) {
-    return 1;
   } else if (isEqualID(GREEN_RACECAR)) {
     return 1;
   } else if (isEqualID(RED_RACECAR)) {
     return 1;
-  } else if (isEqualID(GO_KART)) {
+  } else if (isEqualID(GO_KART_PRUSA)) {
+    return 1;
+  } else if (isEqualID(GO_KART_PROJUNK)) {
+    return 1;
+  } else if (isEqualID(GO_KART_ROENIE)) {
+    return 1;
+  } else if (isEqualID(GO_KART_THOMIE)) {
     return 1;
   } else {
     return 0;
@@ -329,18 +354,18 @@ unsigned int getNrOfLEDStrips() {
 boolean getHasGPSSensor() {
   if (isEqualID(BREADBOARD_RACECAR)) {
     return true;
-  } else if (isEqualID(MAGENTA_RACECAR)) {
-    return true;
-  } else if (isEqualID(BLUE_RACECAR)) {
-    return true;
-  } else if (isEqualID(ORANGE_RACECAR)) {
-    return true;
   } else if (isEqualID(GREEN_RACECAR)) {
     return true;
   } else if (isEqualID(RED_RACECAR)) {
     return true;
-  } else if (isEqualID(GO_KART)) {
+  } else if (isEqualID(GO_KART_PRUSA)) {
     return false;
+  } else if (isEqualID(GO_KART_PROJUNK)) {
+    return false;    
+  } else if (isEqualID(GO_KART_ROENIE)) {
+    return false;    
+  } else if (isEqualID(GO_KART_THOMIE)) {
+    return false;    
   } else {
     return false;
   }
@@ -350,20 +375,62 @@ boolean getHasGPSSensor() {
 boolean getHasCurrentSensor() {
   if (isEqualID(BREADBOARD_RACECAR)) {
     return false;
-  } else if (isEqualID(MAGENTA_RACECAR)) {
-    return true;
-  } else if (isEqualID(BLUE_RACECAR)) {
-    return true;
-  } else if (isEqualID(ORANGE_RACECAR)) {
-    return true;
   } else if (isEqualID(GREEN_RACECAR)) {
     return false;
   } else if (isEqualID(RED_RACECAR)) {
     return false;
-  } else if (isEqualID(GO_KART)) {
+  } else if (isEqualID(GO_KART_PRUSA)) {
     return false;
+  } else if (isEqualID(GO_KART_PROJUNK)) {
+    return true;
+  } else if (isEqualID(GO_KART_ROENIE)) {
+    return true;
+  } else if (isEqualID(GO_KART_THOMIE)) {
+    return true;
   } else {
     return false;
+  }
+}
+
+
+int getKV() {
+  if (isEqualID(BREADBOARD_RACECAR)) {
+    return 850;
+  } else if (isEqualID(GREEN_RACECAR)) {
+    return 850;
+  } else if (isEqualID(RED_RACECAR)) {
+    return 850;
+  } else if (isEqualID(GO_KART_PRUSA)) {
+    return 850;
+  } else if (isEqualID(GO_KART_PROJUNK)) {
+    return 850;
+  } else if (isEqualID(GO_KART_ROENIE)) {
+    return 1400;
+  } else if (isEqualID(GO_KART_THOMIE)) {
+    return 1400;
+  } else {
+    return 0;
+  }
+}
+
+
+int getTireDiameter() {
+  if (isEqualID(BREADBOARD_RACECAR)) {
+    return 72;
+  } else if (isEqualID(GREEN_RACECAR)) {
+    return 72;
+  } else if (isEqualID(RED_RACECAR)) {
+    return 72;
+  } else if (isEqualID(GO_KART_PRUSA)) {
+    return 70;
+  } else if (isEqualID(GO_KART_PROJUNK)) {
+    return 70;
+  } else if (isEqualID(GO_KART_ROENIE)) {
+    return 60;
+  } else if (isEqualID(GO_KART_THOMIE)) {
+    return 60;
+  } else {
+    return 0;
   }
 }
 
@@ -371,18 +438,18 @@ boolean getHasCurrentSensor() {
 DrivingMode getDefaultDrivingMode() {
   if (isEqualID(BREADBOARD_RACECAR)) {
     return dmHalfSpeed;
-  } else if (isEqualID(MAGENTA_RACECAR)) {
-    return dmHalfSpeed;
-  } else if (isEqualID(BLUE_RACECAR)) {
-    return dmHalfSpeed;
-  } else if (isEqualID(ORANGE_RACECAR)) {
-    return dmHalfSpeed;
   } else if (isEqualID(GREEN_RACECAR)) {
     return dmHalfSpeed;
   } else if (isEqualID(RED_RACECAR)) {
     return dmHalfSpeed;
-  } else if (isEqualID(GO_KART)) {
+  } else if (isEqualID(GO_KART_PRUSA)) {
     return dmHalfSpeed;
+  } else if (isEqualID(GO_KART_PROJUNK)) {
+    return dmHalfSpeed;
+  } else if (isEqualID(GO_KART_ROENIE)) {
+    return dmHalfSpeed;
+  } else if (isEqualID(GO_KART_THOMIE)) {
+    return dmFullSpeed;
   } else {
     return dmFullSpeed;
   }
@@ -516,7 +583,7 @@ void calibrateAcc() {
   double angleRollAcc = 0.0;
   double sumPitchAcc = 0.0;
   double sumRollAcc = 0.0;
-  long count = 1*1000*1000/LOOP_TIME;
+  long count = 1*1000*1000/LOOP_TIME_TASK3;
 
   for (long i = 0; i < count; i++) {
     double accTotalVector = sqrt((acc_roll.get()*acc_roll.get())+(acc_pitch.get()*acc_pitch.get())+(acc_yaw.get()*acc_yaw.get()));
@@ -531,7 +598,7 @@ void calibrateAcc() {
     sumPitchAcc += anglePitchAcc;
     sumRollAcc += angleRollAcc;
    
-    while(micros() - calibrationLoopTimer < LOOP_TIME) {
+    while(micros() - calibrationLoopTimer < LOOP_TIME_TASK3) {
       vTaskDelay(1);
     };
     calibrationLoopTimer = micros();
@@ -552,8 +619,13 @@ void calibrateAcc() {
 }
 
 
+double getLoopTimeHz(int prmLoopTime) {
+  return 1000000.0 / prmLoopTime;
+}
+
+
 void calcAngles() {
-  double factor = 1.0/(LOOP_TIME_HZ * 65.5);
+  double factor = 1.0/(getLoopTimeHz(LOOP_TIME_TASK3) * 65.5);
   angle_pitch += gyro_pitch.get() * factor;
   angle_roll += gyro_roll.get() * factor;
   angle_yaw += gyro_yaw.get() * factor;
@@ -622,15 +694,6 @@ void PIDOutput::calc(double prmGyroAxisInput, double prmSetPoint) {
 }
 
 
-void delayEx(uint32_t prmMilisec) {
-  uint32_t timer = millis();
-  while(millis() - timer < prmMilisec) {
-    rtttl::play();
-    vTaskDelay(1);
-  }
-}
-
-
 extern int limitServo(int prmPulse) {
   int rval = prmPulse;
   if (prmPulse > MAX_PULSE) rval = MAX_PULSE;
@@ -639,37 +702,63 @@ extern int limitServo(int prmPulse) {
 }
 
 
-bool isArmed() {
+void checkIsArmed() {
   static bool turnLeftDone = false;
   static bool prevTurnLeftDone = false;
   static bool turnRightDone = false;
   static bool prevTurnRightDone = false;
-  bool is_armed = turnLeftDone && turnRightDone;
-  if (signal_detected && is_armed) {
-    return true;
-  } else if (signal_detected && !is_armed) {
+  static int turnLeftCount = 0;
+  static int turnRightCount = 0;
+  bool has_been_armed = turnLeftDone && turnRightDone;
+
+  if (signal_detected && has_been_armed) {
+    is_armed = true;
+  } else if (signal_detected && !has_been_armed) {
     // check for arming sequence
     if (channel[0] < (MID_CHANNEL-THRESHOLD_SIGNAL)) {
-      turnLeftDone = true;
-      if (!prevTurnLeftDone) {
-        Serial.println("Turn left done");
-        playShortBeep();
-        prevTurnLeftDone = true;
+      turnLeftCount++;
+      if (turnLeftCount == SIGNALS_COUNT_THRESHOLD) {
+        turnLeftDone = true;
+        if (!prevTurnLeftDone) {
+          Serial.println("Turn left done");
+          playShortBeep();
+          prevTurnLeftDone = true;
+        }
+      } else if  (turnLeftCount > SIGNALS_COUNT_THRESHOLD)  {
+        turnLeftCount = SIGNALS_COUNT_THRESHOLD;
+        turnRightCount = 0;
       }
     } else if (channel[0] > (MID_CHANNEL+THRESHOLD_SIGNAL) && turnLeftDone) {
-      turnRightDone = true;
-      if (!prevTurnRightDone) {
-        Serial.println("Turn right done");
-        writeServoPWM(MOTOR_STEERING_PWM_CHANNEL, MID_CHANNEL + steerServoCenterOffset);
-        armEsc();
-        playArmed();
-        prevTurnRightDone = true;
-      }      
+      turnRightCount++;
+      if (turnRightCount == SIGNALS_COUNT_THRESHOLD) {
+        turnRightDone = true;
+        if (!prevTurnRightDone) {
+          Serial.println("Turn right done");
+          writeServoPWM(MOTOR_STEERING_PWM_CHANNEL, MID_CHANNEL + steerServoCenterOffset);
+          armEsc();
+          playArmed();
+          prevTurnRightDone = true;
+        }
+      } else if (turnRightCount > SIGNALS_COUNT_THRESHOLD) {
+        turnRightCount = SIGNALS_COUNT_THRESHOLD;
+        turnLeftCount = 0;
+      }
     }
-    return turnLeftDone && turnRightDone;
+    is_armed = turnLeftDone && turnRightDone;
   } else {
-    return false;
+    turnLeftDone = false;
+    prevTurnLeftDone = false;
+    turnRightDone = false;
+    prevTurnRightDone = false;
+    turnLeftCount = 0;
+    turnRightCount = 0;
+    is_armed = false;
   }
+}
+
+
+bool isArmed() {
+  return is_armed;
 }
 
 
@@ -688,18 +777,16 @@ void waitPlayReady() {
     if (rtttl::done()) {
       break;
     }
-    rtttl::play();        
-    delayEx(1);
+    delay(1);
   }
 }
 
 
 void playTune(String prmTune) {
-  if (!buzzerDisabled) {
+  if ((!buzzerDisabled) && (!buzzerOff)) {
     static char buf[64];
     strcpy(buf, prmTune.c_str());
     rtttl::begin(BUZZER_PIN, buf);
-    rtttl::play();
   }
 }
 
@@ -830,7 +917,7 @@ float readVoltage() {
   const float R2 = 1000.0;
 
   float vBatTotal = analogRead(VOLTAGE_SENSOR_PIN) * (3.3 / 4095.0) * (R1+R2)/R2;
-  int nrOfCells = getNrOfCells(vBatTotal);
+  nrOfCells = getNrOfCells(vBatTotal);
   float cellVoltage = 0.0;
   if (nrOfCells > 0) {
     cellVoltage = voltageCorrectionFactor * vBatTotal / nrOfCells;
@@ -865,6 +952,16 @@ String getCurrentStr() {
 }
 
 
+int getSpeed() {
+  float speed = 0.0f;
+  if (isValidSignalValue(channel[1]) && isArmed()) {
+    speed = PI*getTireDiameter()*getKV()*nrOfCells*voltage*60/1000000*abs(channel[1]-MID_CHANNEL)/(MAX_PULSE-MID_CHANNEL);
+    speed = speed*(getMaxSpeed()-MID_CHANNEL)/MAX_DELTA_SIGNAL;
+  }
+  return round(speed);
+}
+
+
 void incDrivingMode() {
   int dm = drivingMode;
   dm++;
@@ -884,8 +981,7 @@ void playDrivingMode() {
       strcat(DrivingModeTune, ",");  
     }
   }
-  rtttl::begin(BUZZER_PIN, DrivingModeTune);
-  rtttl::play();    
+  playTune(DrivingModeTune);
 }
 
 
@@ -941,7 +1037,8 @@ void updateLEDs() {
   }
 
   state = !state;
-  strip->Show();  
+
+  strip->Show();    
 } 
 
 
@@ -1185,13 +1282,14 @@ String addDQuotes(String prmValue) {
 }
 
 
-String addRow(String prmName, bool prmIsEditableCell, bool prmIsHeader, String prmValue = "") {
+String addRow(String prmName, bool prmIsVisible, bool prmIsEditableCell, bool prmIsHeader, String prmValue = "") {
+  String visibleStyle = prmIsVisible ? "" : INVISIBLE_STYLE;
   String editableCell = prmIsEditableCell ? "contenteditable='true'" : "";
   String prefix = prmIsHeader ? "<th " : "<td ";
   String suffix = prmIsHeader ? "</th>" : "</td>";
   String col1 = prefix + "style=\"width:20%\" ALIGN=CENTER>" + prmName + suffix;
   String col2 = prefix + editableCell + " id=" + addDQuotes(getIdFromName(prmName)) + " style=\"width:20%\" ALIGN=CENTER>" + prmValue + suffix;
-  return "<tr>" + col1 + col2 + "</tr>";
+  return "<tr " + visibleStyle + ">" + col1 + col2 + "</tr>";
 }
 
 
@@ -1276,6 +1374,11 @@ String getChannelProgressStr(String prmChannelDivID, String prmChannelSpanID, St
 }
 
 
+String getLoopTimeProgressStr(String prmLoopTimeID, String prmLoopTimeSpanID, int prmLoopTime) {
+  return "<div class=\"progress\"><div id=\"" + prmLoopTimeID + "\" class=\"progress-bar progress-bar-danger\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"" + String(prmLoopTime) + "\" style=\"width:0%\"><span id=\"" + prmLoopTimeSpanID + "\" ></span></div></div>";
+}
+
+
 String getHtmlHeader() {
   String s = "";
   s += "<head>";
@@ -1344,6 +1447,20 @@ String getHtmlHeader() {
   s += "        color: black;";
   s += "     }";
   s += "  </style>";  
+
+  s += "  <style>";
+  s += "    .btn-group button {";
+  s += "        width: 140px;";
+  s += "        height: 32px;";
+  s += "        white-space: nowrap;";
+  s += "        text-align:center;"; 
+  s += "        vertical-align:middle;";
+  s += "        padding: 0px;";
+  s += "    }";
+  s += "  </style>"; 
+  
+  s += getSpeedoMeterStyle(); 
+  
   s += "</head>";
   return s;
 }
@@ -1353,9 +1470,13 @@ String getScript(String prmToBeClickedTabButton) {
   String s = "";
   s += "<script>";
 
+  s += getSpeedoMeterFunctions(); 
+  s += "var theSpeedoMeter = new speedometer({maxVal:" + String(SPEEDOMETER_MAX_SPEED) + "});";
+  s += "document.getElementById('" +  getIdFromName(NAME_SPEEDOMETER_GAUGE) + "').append(theSpeedoMeter.elm);";
+
   s += "document.getElementById(\"" + getIdFromName(prmToBeClickedTabButton) + "\").click();";
-  s += "requestData();";
-  s += "var timerId = setInterval(requestData, " WEBPAGE_REFRESH_INTERVAL ");";
+  s += "requestData(theSpeedoMeter);";
+  s += "var timerId = setInterval(requestData, " WEBPAGE_REFRESH_INTERVAL ", theSpeedoMeter);";
 
   s += "function getVoltageColorMsg(prmVoltage) {";  
   s += "  if (prmVoltage < " + String(LOW_VOLTAGE_ALARM, 2) + ") {";
@@ -1419,7 +1540,39 @@ String getScript(String prmToBeClickedTabButton) {
   s += "  spanProgressElem.innerText = value;";
   s += "}";
 
-  s += "function requestData() {";
+  s += "function updateLoopTime(prmDivProgressID, prmSpanProgressID, prmLoopTime, prmValue) {";
+  s += "  var divProgressElem = document.getElementById(prmDivProgressID);";
+  s += "  var spanProgressElem = document.getElementById(prmSpanProgressID);";
+  s += "  var usedUpLoopTime = parseInt(prmValue);";
+  s += "  divProgressElem.setAttribute(\"class\", getLoopTimeColorMsg(usedUpLoopTime, prmLoopTime));";
+  s += "  divProgressElem.setAttribute(\"aria-valuenow\", usedUpLoopTime);";
+  s += "  divProgressElem.setAttribute(\"style\", \"width:\" + parseFloat(getLoopTimePercentage(usedUpLoopTime, prmLoopTime)).toFixed(0) + \"%\");";
+  s += "  spanProgressElem.innerText = usedUpLoopTime;";
+  s += "}";
+
+  s += "function getLoopTimePercentage(prmUsedUpLoopTime, prmLoopTime) {";
+  s += "  var percentage = 100*prmUsedUpLoopTime/prmLoopTime;";
+  s += "  if (percentage > 100.0) {";
+  s += "    percentage = 100.0;";
+  s += "  }";
+  s += "  if (percentage < 0.0) {";
+  s += "    percentage = 0.0;";
+  s += "  }";
+  s += "  return percentage;";
+  s += "}";
+
+  s += "function getLoopTimeColorMsg(prmUsedUpLoopTime, prmLoopTime) {"; 
+  s += "  var percentage = getLoopTimePercentage(prmUsedUpLoopTime, prmLoopTime);";
+  s += "  if (percentage > 75) {";
+  s += "    return \"progress-bar progress-bar-danger\";";
+  s += "  } else if (percentage > 50) {";
+  s += "    return \"progress-bar progress-bar-warning\";";
+  s += "  } else {";
+  s += "    return \"progress-bar progress-bar-success\";";
+  s += "  }";  
+  s += "}";
+
+  s += "function requestData(prmSpeedoMeter) {";
   s += "  var xhr = new XMLHttpRequest();";  
   s += "  xhr.open(\"GET\", \"/RequestLatestData\", true);";
   s += "  xhr.timeout = (" WEBPAGE_TIMEOUT ");";  
@@ -1428,6 +1581,10 @@ String getScript(String prmToBeClickedTabButton) {
   s += "      if (xhr.responseText) {";
   s += "        var data = JSON.parse(xhr.responseText);";
   s += "        var parser = new DOMParser();";
+
+  s += "        var speed = data." + getIdFromName(NAME_SPEEDOMETER_GAUGE) + ";";
+  s += "        prmSpeedoMeter.setPosition(speed);";
+
   s += "        document.getElementById(\"" + getIdFromName(NAME_SIGNAL_DETECTED) + "\").innerText = data." + getIdFromName(NAME_SIGNAL_DETECTED) + ";";
   s += "        document.getElementById(\"" + getIdFromName(NAME_ARMED) + "\").innerText = data." + getIdFromName(NAME_ARMED) + ";";  
   s += "        document.getElementById(\"" + getIdFromName(NAME_DRIVING_MODE) + "\").innerText = data." + getIdFromName(NAME_DRIVING_MODE) + ";";
@@ -1454,7 +1611,6 @@ String getScript(String prmToBeClickedTabButton) {
   s += "        document.getElementById(\"" + getIdFromName(NAME_LEFT_ESCS) + "\").innerText = data." + getIdFromName(NAME_LEFT_ESCS) + ";";  
   s += "        document.getElementById(\"" + getIdFromName(NAME_RIGHT_ESCS) + "\").innerText = data." + getIdFromName(NAME_RIGHT_ESCS) + ";";    
 
-  s += "        document.getElementById(\"" + getIdFromName(NAME_USED_UP_LOOPTIME) + "\").innerText = data." + getIdFromName(NAME_USED_UP_LOOPTIME) + ";";
   s += "        document.getElementById(\"" + getIdFromName(NAME_GYRO_X) + "\").innerText = data." + getIdFromName(NAME_GYRO_X) + ";";
   s += "        document.getElementById(\"" + getIdFromName(NAME_GYRO_Y) + "\").innerText = data." + getIdFromName(NAME_GYRO_Y) + ";";
   s += "        document.getElementById(\"" + getIdFromName(NAME_GYRO_Z) + "\").innerText = data." + getIdFromName(NAME_GYRO_Z) + ";";
@@ -1462,6 +1618,11 @@ String getScript(String prmToBeClickedTabButton) {
   s += "        document.getElementById(\"" + getIdFromName(NAME_ACC_Y) + "\").innerText = data." + getIdFromName(NAME_ACC_Y) + ";";
   s += "        document.getElementById(\"" + getIdFromName(NAME_ACC_Z) + "\").innerText = data." + getIdFromName(NAME_ACC_Z) + ";";
   s += "        document.getElementById(\"" + getIdFromName(NAME_TEMPERATURE) + "\").innerText = data." + getIdFromName(NAME_TEMPERATURE) + ";";
+
+  s += "        updateLoopTime(\"" + getIdFromName(ID_PROGRESS_LOOPTIME_1) + "\"," + "\"" + getIdFromName(ID_SPAN_PROGRESS_LOOPTIME_1) + "\"," + String(LOOP_TIME_TASK1) + "," + "data." + getIdFromName(NAME_USED_UP_LOOPTIME_PROGRESS_1) + ");";
+  s += "        updateLoopTime(\"" + getIdFromName(ID_PROGRESS_LOOPTIME_2) + "\"," + "\"" + getIdFromName(ID_SPAN_PROGRESS_LOOPTIME_2) + "\"," + String(LOOP_TIME_TASK2) + "," + "data." + getIdFromName(NAME_USED_UP_LOOPTIME_PROGRESS_2) + ");";
+  s += "        updateLoopTime(\"" + getIdFromName(ID_PROGRESS_LOOPTIME_3) + "\"," + "\"" + getIdFromName(ID_SPAN_PROGRESS_LOOPTIME_3) + "\"," + String(LOOP_TIME_TASK3) + "," + "data." + getIdFromName(NAME_USED_UP_LOOPTIME_PROGRESS_3) + ");";
+  s += "        updateLoopTime(\"" + getIdFromName(ID_PROGRESS_LOOPTIME_4) + "\"," + "\"" + getIdFromName(ID_SPAN_PROGRESS_LOOPTIME_4) + "\"," + String(LOOP_TIME_TASK4) + "," + "data." + getIdFromName(NAME_USED_UP_LOOPTIME_PROGRESS_4) + ");";
 
   s += "        document.getElementById(\"" + getIdFromName(NAME_SATELLITES) + "\").innerText = data." + getIdFromName(NAME_SATELLITES) + ";";
   s += "        document.getElementById(\"" + getIdFromName(NAME_LATITUDE) + "\").innerText = data." + getIdFromName(NAME_LATITUDE) + ";";
@@ -1489,6 +1650,8 @@ String getScript(String prmToBeClickedTabButton) {
   s += "        document.getElementById(\"" + getIdFromName(NAME_PID_OUTPUT_YAW_I) + "\").innerText = data." + getIdFromName(NAME_PID_OUTPUT_YAW_I) + ";"; 
   s += "        document.getElementById(\"" + getIdFromName(NAME_PID_OUTPUT_YAW_D) + "\").innerText = data." + getIdFromName(NAME_PID_OUTPUT_YAW_D) + ";"; 
   s += "        document.getElementById(\"" + getIdFromName(NAME_PID_OUTPUT_YAW) + "\").innerText = data." + getIdFromName(NAME_PID_OUTPUT_YAW) + ";"; 
+
+  s += "        document.getElementById(" + addDQuotes(ID_BUZZER_BUTTON) + ").innerText = data." + ID_BUZZER_BUTTON + ";"; 
 
   s += "      }";  
   s += "    }";
@@ -1549,15 +1712,26 @@ String getDrivingModeSt() {
 }
 
 
+String getBuzzerCaption() {
+  String st = "Buzzer ";
+  st += buzzerOff ? "On" : "Off";
+  return st;
+}
+
+
 String getWebPage(String prmToBeClickedTabButton) {
   String s = "<!DOCTYPE html><html>";
   s += getHtmlHeader();
 
+  String gpsStyle = hasGPSSensor ? "" : INVISIBLE_STYLE;
+
   s += "<div class=\"tab\">";
   s += "<button class=\"tablinks\" onclick=\"selectTab(event, '" + getIdFromName(NAME_TAB_TELEMETRY) + "')\" id=\"" + getIdFromName(NAME_TAB_BUTTON_TELEMETRY) + "\">" NAME_TAB_TELEMETRY "</button>";
-  s += "<button class=\"tablinks\" onclick=\"selectTab(event, '" + getIdFromName(NAME_TAB_GPS) + "')\" id=\"" + getIdFromName(NAME_TAB_BUTTON_GPS) + "\">" NAME_TAB_GPS "</button>";
+  s += "<button " + gpsStyle + " class=\"tablinks\" onclick=\"selectTab(event, '" + getIdFromName(NAME_TAB_GPS) + "')\" id=\"" + getIdFromName(NAME_TAB_BUTTON_GPS) + "\">" NAME_TAB_GPS "</button>";
+  s += "<button class=\"tablinks\" onclick=\"selectTab(event, '" + getIdFromName(NAME_TAB_SPEEDOMETER) + "')\" id=\"" + getIdFromName(NAME_TAB_BUTTON_SPEEDOMETER) + "\">" NAME_TAB_SPEEDOMETER "</button>";
   s += "<button class=\"tablinks\" onclick=\"selectTab(event, '" + getIdFromName(NAME_TAB_SETTINGS) + "')\" id=\"" + getIdFromName(NAME_TAB_BUTTON_SETTINGS) + "\">" NAME_TAB_SETTINGS "</button>";
   s += "</div>";
+
 
   s += "<div id=\"" NAME_TAB_TELEMETRY "\" class=\"tabcontent\">";
 
@@ -1565,29 +1739,32 @@ String getWebPage(String prmToBeClickedTabButton) {
   s += "<br>";
 
   s += "<table ALIGN=CENTER style=width:50%>";
-  s += addRow(NAME_MODEL, false, true, robotName);
-  s += addRow(NAME_VERSION, false, false, RACECAR_VERSION);
-  s += addRow(NAME_SIGNAL_DETECTED, false, false);
-  s += addRow(NAME_ARMED, false, false);
-  s += addRow(NAME_DRIVING_MODE, false, false);
-  s += addRow(NAME_CHANNEL_1, false, false, getChannelProgressStr(ID_PROGRESS_CHANNEL_1, ID_SPAN_PROGRESS_CHANNEL_1, "progress-bar-ch1"));
-  s += addRow(NAME_CHANNEL_2, false, false, getChannelProgressStr(ID_PROGRESS_CHANNEL_2, ID_SPAN_PROGRESS_CHANNEL_2, "progress-bar-ch2"));
-  s += addRow(NAME_CHANNEL_3, false, false, getChannelProgressStr(ID_PROGRESS_CHANNEL_3, ID_SPAN_PROGRESS_CHANNEL_3, "progress-bar-ch3"));
-  s += addRow(NAME_VOLTAGE, false, false);
-  s += addRow(NAME_VOLTAGE_PROGRESS, false, false, getVoltageProgressStr());
-  s += addRow(NAME_CURRENT, false, false);
-  s += addRow(NAME_CURRENT_PROGRESS, false, false, getCurrentProgressStr());
-  s += addRow(NAME_STEER_SERVO, false, false);
-  s += addRow(NAME_LEFT_ESCS, false, false);
-  s += addRow(NAME_RIGHT_ESCS, false, false);  
-  s += addRow(NAME_GYRO_X, false, false);
-  s += addRow(NAME_GYRO_Y, false, false);
-  s += addRow(NAME_GYRO_Z, false, false);
-  s += addRow(NAME_ACC_X, false, false);
-  s += addRow(NAME_ACC_Y, false, false);
-  s += addRow(NAME_ACC_Z, false, false);
-  s += addRow(NAME_TEMPERATURE, false, false);
-  s += addRow(NAME_USED_UP_LOOPTIME, false, false);
+  s += addRow(NAME_MODEL, true, false, true, robotName);
+  s += addRow(NAME_VERSION, true, false, false, RACECAR_VERSION);
+  s += addRow(NAME_SIGNAL_DETECTED, true, false, false);
+  s += addRow(NAME_ARMED, true, false, false);
+  s += addRow(NAME_DRIVING_MODE, true, false, false);
+  s += addRow(NAME_CHANNEL_1, true, false, false, getChannelProgressStr(ID_PROGRESS_CHANNEL_1, ID_SPAN_PROGRESS_CHANNEL_1, "progress-bar-ch1"));
+  s += addRow(NAME_CHANNEL_2, true, false, false, getChannelProgressStr(ID_PROGRESS_CHANNEL_2, ID_SPAN_PROGRESS_CHANNEL_2, "progress-bar-ch2"));
+  s += addRow(NAME_CHANNEL_3, true, false, false, getChannelProgressStr(ID_PROGRESS_CHANNEL_3, ID_SPAN_PROGRESS_CHANNEL_3, "progress-bar-ch3"));
+  s += addRow(NAME_VOLTAGE, true, false, false);
+  s += addRow(NAME_VOLTAGE_PROGRESS, true, false, false, getVoltageProgressStr());
+  s += addRow(NAME_CURRENT, hasCurrentSensor, false, false);
+  s += addRow(NAME_CURRENT_PROGRESS, hasCurrentSensor, false, false, getCurrentProgressStr());
+  s += addRow(NAME_STEER_SERVO, true, false, false);
+  s += addRow(NAME_LEFT_ESCS, true, false, false);
+  s += addRow(NAME_RIGHT_ESCS, true, false, false);  
+  s += addRow(NAME_GYRO_X, true, false, false);
+  s += addRow(NAME_GYRO_Y, true, false, false);
+  s += addRow(NAME_GYRO_Z, true, false, false);
+  s += addRow(NAME_ACC_X, true, false, false);
+  s += addRow(NAME_ACC_Y, true, false, false);
+  s += addRow(NAME_ACC_Z, true, false, false);
+  s += addRow(NAME_TEMPERATURE, true, false, false);
+  s += addRow(NAME_USED_UP_LOOPTIME_PROGRESS_1, true, false, false, getLoopTimeProgressStr(ID_PROGRESS_LOOPTIME_1, ID_SPAN_PROGRESS_LOOPTIME_1, LOOP_TIME_TASK1));
+  s += addRow(NAME_USED_UP_LOOPTIME_PROGRESS_2, true, false, false, getLoopTimeProgressStr(ID_PROGRESS_LOOPTIME_2, ID_SPAN_PROGRESS_LOOPTIME_2, LOOP_TIME_TASK2));
+  s += addRow(NAME_USED_UP_LOOPTIME_PROGRESS_3, true, false, false, getLoopTimeProgressStr(ID_PROGRESS_LOOPTIME_3, ID_SPAN_PROGRESS_LOOPTIME_3, LOOP_TIME_TASK3));
+  s += addRow(NAME_USED_UP_LOOPTIME_PROGRESS_4, true, false, false, getLoopTimeProgressStr(ID_PROGRESS_LOOPTIME_4, ID_SPAN_PROGRESS_LOOPTIME_4, LOOP_TIME_TASK4));
   s += "</table>";
 
   s += "<br>";
@@ -1609,22 +1786,30 @@ String getWebPage(String prmToBeClickedTabButton) {
   s += "<br>";
 
   s += "<table ALIGN=CENTER style=width:50%>";
-  s += addRow(NAME_GPS_INFO, false, true, "Information");
-  s += addRow(NAME_SATELLITES, false, false);
-  s += addRow(NAME_LATITUDE, false, false);
-  s += addRow(NAME_LONGITUDE, false, false);
-  s += addRow(NAME_DATE, false, false);
-  s += addRow(NAME_TIME, false, false);
-  s += addRow(NAME_SPEED, false, false);
-  s += addRow(NAME_MAX_SPEED, false, false);
-  s += addRow(NAME_TOTAL_DISTANCE, false, false);
+  s += addRow(NAME_GPS_INFO, true, false, true, "Information");
+  s += addRow(NAME_SATELLITES, true, false, false);
+  s += addRow(NAME_LATITUDE, true, false, false);
+  s += addRow(NAME_LONGITUDE, true, false, false);
+  s += addRow(NAME_DATE, true, false, false);
+  s += addRow(NAME_TIME, true, false, false);
+  s += addRow(NAME_SPEED, true, false, false);
+  s += addRow(NAME_MAX_SPEED, true, false, false);
+  s += addRow(NAME_TOTAL_DISTANCE, true, false, false);
   s += "</table>";
 
   s += "<br>";
   s += "<br>";
 
   s += "<div class=\"btn-group\" style=\"width:100%\">";
-  s += "<a href=\"/Zero\"><button type=\"button\" style=\"width:140px\" class=\"button\">Zero</button></a>";
+  s += "<a href=\"/Zero\"><button type=\"button\" class=\"button\">Zero</button></a>";
+  s += "</div>";
+  s += "</div>";
+
+
+  s += "<div id=\"" NAME_TAB_SPEEDOMETER "\" class=\"tabcontent\">";
+  s += "<br>";
+  s += "<br>";
+  s += "<div id=\"" NAME_SPEEDOMETER_GAUGE "\" style=\"display:flex;justify-content:center;\">";
   s += "</div>";
   s += "</div>";
 
@@ -1635,13 +1820,13 @@ String getWebPage(String prmToBeClickedTabButton) {
   s += "<br>";
 
   s += "<table ALIGN=CENTER style=width:50%>";
-  s += addRow(NAME_STEER_EXPO, true, false, String(steerExpoFactor, 2));
-  s += addRow(NAME_STEER_SERVO_CENTER_OFFSET, true, false, String(steerServoCenterOffset));
-  s += addRow(NAME_SPEED_ESC_CENTER_OFFSET, true, false, String(speedEscCenterOffset));
-  s += addRow(NAME_VOLTAGE_CORRECTION, true, false, String(voltageCorrectionFactor, 2));
-  s += addRow(NAME_CURRENT_CORRECTION, true, false, String(currentCorrectionFactor, 2));
-  s += addRow(NAME_CALIBRATED_ROLL_ANGLE, true, false, String(calibrated_angle_roll_acc, 2));
-  s += addRow(NAME_CALIBRATED_PITCH_ANGLE, true, false, String(calibrated_angle_pitch_acc, 2));  
+  s += addRow(NAME_STEER_EXPO, true, true, false, String(steerExpoFactor, 2));
+  s += addRow(NAME_STEER_SERVO_CENTER_OFFSET, true, true, false, String(steerServoCenterOffset));
+  s += addRow(NAME_SPEED_ESC_CENTER_OFFSET, true, true, false, String(speedEscCenterOffset));
+  s += addRow(NAME_VOLTAGE_CORRECTION, true, true, false, String(voltageCorrectionFactor, 2));
+  s += addRow(NAME_CURRENT_CORRECTION, true, true, false, String(currentCorrectionFactor, 2));
+  s += addRow(NAME_CALIBRATED_ROLL_ANGLE, true, true, false, String(calibrated_angle_roll_acc, 2));
+  s += addRow(NAME_CALIBRATED_PITCH_ANGLE, true, true, false, String(calibrated_angle_pitch_acc, 2));  
   s += "</table>";
 
   s += "<br>";
@@ -1656,11 +1841,15 @@ String getWebPage(String prmToBeClickedTabButton) {
   s += "<br>";
 
   s += "<div class=\"btn-group\" style=\"width:100%\">";
-  s += "<a><button onclick=\"savePropValues()\" type=\"button\" style=\"width:140px\" class=\"button\">Save</button></a>";  
-  s += "<a href=\"/Cancel\"><button type=\"button\" style=\"width:140px\" class=\"button\">Cancel</button></a>";
-  s += "<a href=\"/CalibrateAcc\"><button type=\"button\" style=\"width:180px;white-space:nowrap\" class=\"button\">Calibrate Acc</button></a>";  
-  s += "<a href=\"/WifiOff\"><button type=\"button\" style=\"width:140px;white-space:nowrap\" class=\"button\">Wifi Off</button></a>";
-  s += "<a href=\"/Defaults\"><button type=\"button\" style=\"width:140px\" class=\"button\">Defaults</button></a>";
+  s += "<a href=\"/CalibrateAcc\"><button type=\"button\" style=\"width:180px;\" class=\"button\">Calibrate Acc</button></a>";  
+  s += "<a href=\"/BuzzerOnOff\"><button id=" + addDQuotes(ID_BUZZER_BUTTON) + " type=\"button\" style=\"width:160px;\" class=\"button\">" + getBuzzerCaption() + "</button></a>";
+  s += "<a href=\"/WifiOff\"><button type=\"button\" class=\"button\">Wifi Off</button></a>";
+  s += "</div>";
+
+  s += "<div class=\"btn-group\" style=\"width:100%\">";
+  s += "<a><button onclick=\"savePropValues()\" type=\"button\" class=\"button\">Save</button></a>";  
+  s += "<a href=\"/Cancel\"><button type=\"button\" class=\"button\">Cancel</button></a>";
+  s += "<a href=\"/Defaults\"><button type=\"button\" class=\"button\">Defaults</button></a>";
   s += "</div>";
 
   s += "</div>";  
@@ -1686,7 +1875,10 @@ String getLatestData() {
   data += "\"" + getIdFromName(NAME_STEER_SERVO) + "\":" + addDQuotes(toString(steerServo)) + ",";  
   data += "\"" + getIdFromName(NAME_LEFT_ESCS) + "\":" + addDQuotes(toString(leftEscs)) + ",";  
   data += "\"" + getIdFromName(NAME_RIGHT_ESCS) + "\":" + addDQuotes(toString(rightEscs)) + ",";  
-  data += "\"" + getIdFromName(NAME_USED_UP_LOOPTIME) + "\":" + String(usedUpLoopTime) + ",";
+  data += "\"" + getIdFromName(NAME_USED_UP_LOOPTIME_PROGRESS_1) + "\":" + String(usedUpLoopTimeTask1) + ",";
+  data += "\"" + getIdFromName(NAME_USED_UP_LOOPTIME_PROGRESS_2) + "\":" + String(usedUpLoopTimeTask2) + ",";
+  data += "\"" + getIdFromName(NAME_USED_UP_LOOPTIME_PROGRESS_3) + "\":" + String(usedUpLoopTimeTask3) + ",";
+  data += "\"" + getIdFromName(NAME_USED_UP_LOOPTIME_PROGRESS_4) + "\":" + String(usedUpLoopTimeTask4) + ",";
 
   data += "\"" + getIdFromName(NAME_GYRO_X) + "\":" + addDQuotes(String(gyro_x)) + ",";
   data += "\"" + getIdFromName(NAME_GYRO_Y) + "\":" + addDQuotes(String(gyro_y)) + ",";
@@ -1729,10 +1921,14 @@ String getLatestData() {
   data += "\"" + getIdFromName(NAME_TIME) + "\":" + addDQuotes(time_str) + ",";
   data += "\"" + getIdFromName(NAME_SPEED) + "\":" + addDQuotes(speed_str) + ",";
   data += "\"" + getIdFromName(NAME_MAX_SPEED) + "\":" + addDQuotes(String(maxSpeed, 0)) + ",";
-  data += "\"" + getIdFromName(NAME_TOTAL_DISTANCE) + "\":" + addDQuotes(String(totalDistance, 3));
+  data += "\"" + getIdFromName(NAME_TOTAL_DISTANCE) + "\":" + addDQuotes(String(totalDistance, 3)) + ",";
+
+  data += "\"" + getIdFromName(NAME_SPEEDOMETER_GAUGE) + "\":" + addDQuotes(String(getSpeed())) + ",";
+
+  data += addDQuotes(ID_BUZZER_BUTTON) + ":" + addDQuotes(getBuzzerCaption());
 
   data += "}";  
-  //Serial.println(data);
+  //Serial.println(data);  
   return data;
 }
 
