@@ -37,6 +37,7 @@ void task1_setup() {
 void task1_loop() {
   unsigned long millisTimer = millis();
 
+  wiFiSignalStrength = getWiFiSignalStrength();
   voltage = LowPassFilter(VOLTAGE_NOICE_FILTER, readVoltage(), voltage);
   current = LowPassFilter(CURRENT_NOICE_FILTER, readCurrent(), current);  
   getGPSData();

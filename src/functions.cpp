@@ -1,6 +1,7 @@
 #include <functions.h>
 
 
+volatile int32_t wiFiSignalStrength = MIN_SIGNAL_STRENGTH;
 volatile bool APStarted = false;
 volatile int channel[NR_OF_RECEIVER_CHANNELS];
 volatile int prevAuxChannel;
@@ -912,6 +913,15 @@ int getNrOfCells(float prmVBatTotal) {
 }
 
 
+int32_t getWiFiSignalStrength() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return WiFi.RSSI();
+  } else {
+    return MIN_SIGNAL_STRENGTH;
+  }
+}
+
+
 float readVoltage() {
   const float R1 = 4700.0;
   const float R2 = 1000.0;
@@ -1359,6 +1369,11 @@ String toString(double prmValue) {
 }
 
 
+String getGenericProgressStr(String prmID, String prmSpanID, int prmValueMin, int prmValueMax) {
+  return "<div class=\"progress\"><div id=\"" + prmID + "\" class=\"progress-bar progress-bar-danger\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"" + String(prmValueMin) + "\"  aria-valuemax=\"" + String(prmValueMax) + "\" style=\"width:0%\"><span id=\"" + prmSpanID + "\" ></span></div></div>";
+}
+
+
 String getVoltageProgressStr() {
   return "<div class=\"progress\"><div id=\"" ID_PROGRESS_VOLTAGE "\" class=\"progress-bar progress-bar-danger\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\" style=\"width:0%\">0%</div></div>";
 }
@@ -1475,8 +1490,68 @@ String getScript(String prmToBeClickedTabButton) {
   s += "document.getElementById('" +  getIdFromName(NAME_SPEEDOMETER_GAUGE) + "').append(theSpeedoMeter.elm);";
 
   s += "document.getElementById(\"" + getIdFromName(prmToBeClickedTabButton) + "\").click();";
-  s += "requestData(theSpeedoMeter);";
-  s += "var timerId = setInterval(requestData, " WEBPAGE_REFRESH_INTERVAL ", theSpeedoMeter);";
+  s += "var errorCounter = 0;";
+  s += "var firstTimeOutOfSync = true;";
+  s += "var sendCounter = 0;";
+  s += "var receiveCounter = 0;";
+  s += "var requestSendTime = getTimeMS();";
+  s += "var responseReceiveTime = requestSendTime;";  
+  s += "requestData();";
+    
+  s += "var timerId = setInterval(requestData, " TELEMETRY_REFRESH_INTERVAL ");";
+  s += "var isAliveTimerId = setInterval(updateResponseTimeData, " IS_ALIVE_REFRESH_INTERVAL ");";
+
+  s += "function map(x, in_min, in_max, out_min, out_max) {";
+  s += "  run = in_max - in_min;";
+  s += "  if (run == 0) {";
+  s += "    return -1;";
+  s += "  }";
+  s += "  rise = out_max - out_min;";
+  s += "  delta = x - in_min;";
+  s += "  return (delta * rise) / run + out_min;";
+  s += "}";
+
+  s += "function getResponseTimeColorMsg(prmResponseTime) {";  
+  s += "  if (prmResponseTime > " + String(BAD_RESPONSE_TIME) + ") {";
+  s += "    return \"progress-bar progress-bar-danger\";";
+  s += "  } else if (prmResponseTime > " + String(WARNING_RESPONSE_TIME) + ") {";
+  s += "    return \"progress-bar progress-bar-warning\";";
+  s += "  } else {";
+  s += "    return \"progress-bar progress-bar-success\";";
+  s += "  }";  
+  s += "}";
+
+  s += "function getResponseTimePercentage(prmResponseTime) {";
+  s += "  var percentage = map(prmResponseTime," + String(MIN_RESPONSE_TIME) + "," + String(MAX_RESPONSE_TIME) + ",0,100);";
+  s += "  if (percentage > 100.0) {";
+  s += "    percentage = 100.0;";
+  s += "  }";
+  s += "  if (percentage < 0.0) {";
+  s += "    percentage = 0.0;";
+  s += "  }";
+  s += "  return percentage;";
+  s += "}";
+
+  s += "function getWiFiSignalStrengthColorMsg(prmWiFiSignalStrength) {";  
+  s += "  if (prmWiFiSignalStrength < " + String(LOW_SIGNAL_STRENGTH) + ") {";
+  s += "    return \"progress-bar progress-bar-danger\";";
+  s += "  } else if (prmWiFiSignalStrength < " + String(WARNING_SIGNAL_STRENGTH) + ") {";
+  s += "    return \"progress-bar progress-bar-warning\";";
+  s += "  } else {";
+  s += "    return \"progress-bar progress-bar-success\";";
+  s += "  }";  
+  s += "}";
+
+  s += "function getWiFiSignalStrengthPercentage(prmWiFiSignalStrength) {";
+  s += "  var percentage = map(prmWiFiSignalStrength," + String(MIN_SIGNAL_STRENGTH) + "," + String(MAX_SIGNAL_STRENGTH) + ",0,100);";
+  s += "  if (percentage > 100.0) {";
+  s += "    percentage = 100.0;";
+  s += "  }";
+  s += "  if (percentage < 0.0) {";
+  s += "    percentage = 0.0;";
+  s += "  }";
+  s += "  return percentage;";
+  s += "}";
 
   s += "function getVoltageColorMsg(prmVoltage) {";  
   s += "  if (prmVoltage < " + String(LOW_VOLTAGE_ALARM, 2) + ") {";
@@ -1531,6 +1606,26 @@ String getScript(String prmToBeClickedTabButton) {
   s += "  return percentage;";
   s += "}";
 
+  s += "function updateResponseTime(prmDivProgressID, prmSpanProgressID, prmValue) {";
+  s += "  var divProgressElem = document.getElementById(prmDivProgressID);";
+  s += "  var spanProgressElem = document.getElementById(prmSpanProgressID);";
+  s += "  var responseTime = parseInt(prmValue);";
+  s += "  divProgressElem.setAttribute(\"class\", getResponseTimeColorMsg(responseTime));";
+  s += "  divProgressElem.setAttribute(\"aria-valuenow\", responseTime);";
+  s += "  divProgressElem.setAttribute(\"style\", \"width:\" + parseFloat(getResponseTimePercentage(responseTime)).toFixed(0) + \"%\");";
+  s += "  spanProgressElem.innerText = responseTime;";
+  s += "}";
+
+  s += "function updateWifiSignalStrength(prmDivProgressID, prmSpanProgressID, prmValue) {";
+  s += "  var divProgressElem = document.getElementById(prmDivProgressID);";
+  s += "  var spanProgressElem = document.getElementById(prmSpanProgressID);";
+  s += "  var wiFiSignalStrength = parseInt(prmValue);";
+  s += "  divProgressElem.setAttribute(\"class\", getWiFiSignalStrengthColorMsg(wiFiSignalStrength));";
+  s += "  divProgressElem.setAttribute(\"aria-valuenow\", wiFiSignalStrength);";
+  s += "  divProgressElem.setAttribute(\"style\", \"width:\" + parseFloat(getWiFiSignalStrengthPercentage(wiFiSignalStrength)).toFixed(0) + \"%\");";
+  s += "  spanProgressElem.innerText = wiFiSignalStrength;";
+  s += "}";
+
   s += "function updateChannel(prmDivProgressID, prmSpanProgressID, prmValue) {";
   s += "  var divProgressElem = document.getElementById(prmDivProgressID);";
   s += "  var spanProgressElem = document.getElementById(prmSpanProgressID);";
@@ -1572,18 +1667,63 @@ String getScript(String prmToBeClickedTabButton) {
   s += "  }";  
   s += "}";
 
-  s += "function requestData(prmSpeedoMeter) {";
-  s += "  var xhr = new XMLHttpRequest();";  
-  s += "  xhr.open(\"GET\", \"/RequestLatestData\", true);";
-  s += "  xhr.timeout = (" WEBPAGE_TIMEOUT ");";  
+  s += "function getTimeMS() {";
+  s += "  var date = new Date();";
+  s += "  return date.getTime();";
+  s += "}";
+
+  s += "function updateResponseTimeData() {";
+  s += "  var responseTime =  responseReceiveTime-requestSendTime;";
+  s += "  if (responseTime < 0) {";
+  s += "    responseTime =  getTimeMS()-responseReceiveTime;";
+  s += "  }";
+  s += "  updateResponseTime(\"" + getIdFromName(ID_PROGRESS_RESP_TIME) + "\"," + "\"" + getIdFromName(ID_SPAN_PROGRESS_RESP_TIME) + "\", responseTime);";
+  s += "}";
+
+  s += "function IsReadyToSendNextRequest() {";
+  s += "  if (sendCounter == receiveCounter) {"; 
+  s += "    firstTimeOutOfSync = true;";
+  s += "    errorCounter = 0;";  
+  s += "    return true;";
+  s += "  } else {";
+  s += "    if (firstTimeOutOfSync) {";
+  s += "      firstTimeOutOfSync = false;";  
+  s += "      return false;";
+  s += "    } else {";  
+  s += "      if (errorCounter > 10) {";
+  s += "        firstTimeOutOfSync = true;";  
+  s += "        errorCounter = 0;";
+  s += "        sendCounter = 0;";
+  s += "        receiveCounter = 0;";
+  s += "        return false;";
+  s += "      } else {";
+  s += "        errorCounter++;";  
+  s += "        return false;";
+  s += "      }";  
+  s += "    }";  
+  s += "  }";
+  s += "}";  
+
+  s += "function requestData() {";  
+  s += "  if (!IsReadyToSendNextRequest()) {";
+  s += "    return;";
+  s += "  }";  
+
+  s += "  var xhr = new XMLHttpRequest();";
+  s += "  xhr.open(\"GET\", \"/RequestLatestData\", true);";  
+  s += "  xhr.timeout = (" TELEMETRY_RECEIVE_TIMEOUT ");";  
   s += "  xhr.onload = function() {";
+  s += "    receiveCounter++;";
+  s += "    responseReceiveTime = getTimeMS();";
   s += "    if (xhr.status == 200) {";
   s += "      if (xhr.responseText) {";
   s += "        var data = JSON.parse(xhr.responseText);";
   s += "        var parser = new DOMParser();";
 
   s += "        var speed = data." + getIdFromName(NAME_SPEEDOMETER_GAUGE) + ";";
-  s += "        prmSpeedoMeter.setPosition(speed);";
+  s += "        theSpeedoMeter.setPosition(speed);";
+
+  s += "        updateWifiSignalStrength(\"" + getIdFromName(ID_PROGRESS_WIFI_SS) + "\"," + "\"" + getIdFromName(ID_SPAN_PROGRESS_WIFI_SS) + "\"," + "data." + getIdFromName(NAME_WIFI_SIGNAL_STRENGTH) + ");";
 
   s += "        document.getElementById(\"" + getIdFromName(NAME_SIGNAL_DETECTED) + "\").innerText = data." + getIdFromName(NAME_SIGNAL_DETECTED) + ";";
   s += "        document.getElementById(\"" + getIdFromName(NAME_ARMED) + "\").innerText = data." + getIdFromName(NAME_ARMED) + ";";  
@@ -1656,6 +1796,9 @@ String getScript(String prmToBeClickedTabButton) {
   s += "      }";  
   s += "    }";
   s += "  };";
+
+  s += "  requestSendTime = getTimeMS();"; 
+  s += "  sendCounter++;";
   s += "  xhr.send();";  
   s += "}";
   
@@ -1740,7 +1883,9 @@ String getWebPage(String prmToBeClickedTabButton) {
 
   s += "<table ALIGN=CENTER style=width:50%>";
   s += addRow(NAME_MODEL, true, false, true, robotName);
-  s += addRow(NAME_VERSION, true, false, false, RACECAR_VERSION);
+  s += addRow(NAME_VERSION, true, false, false, RACECAR_VERSION);  
+  s += addRow(NAME_RESPONSE_TIME, true, false, false, getGenericProgressStr(ID_PROGRESS_RESP_TIME, ID_SPAN_PROGRESS_RESP_TIME, MIN_RESPONSE_TIME, MAX_RESPONSE_TIME));
+  s += addRow(NAME_WIFI_SIGNAL_STRENGTH, true, false, false, getGenericProgressStr(ID_PROGRESS_WIFI_SS, ID_SPAN_PROGRESS_WIFI_SS, MIN_SIGNAL_STRENGTH, MAX_SIGNAL_STRENGTH));
   s += addRow(NAME_SIGNAL_DETECTED, true, false, false);
   s += addRow(NAME_ARMED, true, false, false);
   s += addRow(NAME_DRIVING_MODE, true, false, false);
@@ -1809,7 +1954,8 @@ String getWebPage(String prmToBeClickedTabButton) {
   s += "<div id=\"" NAME_TAB_SPEEDOMETER "\" class=\"tabcontent\">";
   s += "<br>";
   s += "<br>";
-  s += "<div id=\"" NAME_SPEEDOMETER_GAUGE "\" style=\"display:flex;justify-content:center;\">";
+  s += "<br><br><br><br><br><br><br><br><br><br>";
+  s += "<div id=\"" NAME_SPEEDOMETER_GAUGE "\" style=\"scale:" + String(SPEEDOMETER_SCALE, 2) + ";display:flex;justify-content:center;\">";
   s += "</div>";
   s += "</div>";
 
@@ -1864,6 +2010,7 @@ String getWebPage(String prmToBeClickedTabButton) {
 String getLatestData() {
   String data = "{";
 
+  data += "\"" + getIdFromName(NAME_WIFI_SIGNAL_STRENGTH) + "\":" + addDQuotes(toString(wiFiSignalStrength)) + ",";
   data += "\"" + getIdFromName(NAME_SIGNAL_DETECTED) + "\":" + addDQuotes(toString(signal_detected)) + ",";
   data += "\"" + getIdFromName(NAME_ARMED) + "\":" + addDQuotes(toString(isArmed())) + ",";
   data += "\"" + getIdFromName(NAME_DRIVING_MODE) + "\":" + addDQuotes(getDrivingModeSt()) + ",";

@@ -119,6 +119,7 @@ void zeroHandler() {
 
 
 void getLatestDataHandler() {
+  //Serial.println("getLatestDataHandler");
   server.send(200, "text/html", getLatestData()); 
 }
 

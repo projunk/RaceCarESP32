@@ -18,7 +18,7 @@
 
 #define eps                         0.00001
 
-#define RACECAR_VERSION             "1.7"
+#define RACECAR_VERSION             "1.8"
 
 // CORE0 is used by WIFI
 #define CORE0                       0
@@ -72,6 +72,7 @@
 #define MIN_STEER_FACTOR          0.1
 
 #define SPEEDOMETER_MAX_SPEED     100
+#define SPEEDOMETER_SCALE         2.0
 
 #define PWM_FREQUENCY_SERVO       50
 #define PWM_RESOLUTION_SERVO      12
@@ -122,6 +123,8 @@
 
 #define NAME_MODEL                  "Model"
 #define NAME_VERSION                "Version"
+#define NAME_WIFI_SIGNAL_STRENGTH   "WiFi Signal Strength [dB]"
+#define NAME_RESPONSE_TIME          "Response Time [ms]"
 #define NAME_CHANNEL_1              "Channel 1 (Steer)"
 #define NAME_CHANNEL_2              "Channel 2 (Speed)"
 #define NAME_CHANNEL_3              "Channel 3 (Aux)"
@@ -203,6 +206,10 @@
 #define NAME_LEFT_ESCS              "Left Escs"
 #define NAME_RIGHT_ESCS             "Right Escs"
 
+#define ID_PROGRESS_RESP_TIME       "progressID_resp_time"
+#define ID_SPAN_PROGRESS_RESP_TIME  "progressSpanID_resp_time"
+#define ID_PROGRESS_WIFI_SS         "progressID_wifi_ss"
+#define ID_SPAN_PROGRESS_WIFI_SS    "progressSpanID_wifi_ss"
 #define ID_PROGRESS_VOLTAGE         "progressID_voltage"
 #define ID_PROGRESS_CURRENT         "progressID_current"
 #define ID_PROGRESS_CHANNEL_1       "progressID_ch1"
@@ -224,8 +231,9 @@
 
 #define INVISIBLE_STYLE             "style=\"display: none;\""
 
-#define WEBPAGE_REFRESH_INTERVAL    "250"
-#define WEBPAGE_TIMEOUT             "200"
+#define TELEMETRY_REFRESH_INTERVAL    "250"
+#define TELEMETRY_RECEIVE_TIMEOUT     "1000"
+#define IS_ALIVE_REFRESH_INTERVAL     "100"
 
 
 enum DrivingMode {
@@ -234,6 +242,7 @@ enum DrivingMode {
 };
 
 
+extern volatile int32_t wiFiSignalStrength;
 extern volatile unsigned long usedUpLoopTimeTask1, usedUpLoopTimeTask2, usedUpLoopTimeTask3, usedUpLoopTimeTask4;
 extern volatile int channel[];
 extern volatile int prevAuxChannel;
@@ -315,6 +324,15 @@ const int defaultSpeedEscCenterOffset = 0;
 const double defaultVoltageCorrectionFactor = 1.0;
 const double defaultCurrentCorrectionFactor = 1.0;
 
+const int MIN_RESPONSE_TIME = 0;
+const int WARNING_RESPONSE_TIME = 500;
+const int BAD_RESPONSE_TIME = 1000;
+const int MAX_RESPONSE_TIME = 1500;
+
+const int32_t MIN_SIGNAL_STRENGTH = -90;
+const int32_t LOW_SIGNAL_STRENGTH = -80;
+const int32_t WARNING_SIGNAL_STRENGTH = -67;
+const int32_t MAX_SIGNAL_STRENGTH = -30;
 
 const float LOW_VOLTAGE_ALARM = 3.5;
 const float FULLY_CHARGED_VOLTAGE = 4.2;
@@ -443,6 +461,7 @@ extern int getMinSpeed();
 extern void calcMotorValues(int prmYawChannel, int prmThrottleChannel);
 extern float readCurrentSensor();
 extern int getNrOfCells(float prmVTotal);
+extern int32_t getWiFiSignalStrength();
 extern float readVoltage();
 extern String getVoltageStr();
 extern float readCurrent();
