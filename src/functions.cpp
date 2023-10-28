@@ -10,14 +10,10 @@ volatile bool signal_detected, prev_signal_detected;
 volatile bool is_armed = false;
 volatile float voltage, current;
 volatile int nrOfCells = 0;
-volatile short gyro_x, gyro_y, gyro_z;
-volatile short acc_x, acc_y, acc_z;
-volatile short temperature = 0;
-long gyro_x_cal, gyro_y_cal, gyro_z_cal;
 volatile unsigned long signal_micros_timer_value;
 volatile int steerServo, leftEscs, rightEscs;
 int speed_input, steer_input, leftSpeedSteer, rightSpeedSteer;
-bool mpu_6050_found = false;
+bool isVoltageAlarmEnabled = true;
 bool hasGPSSensor;
 bool hasCurrentSensor;
 DrivingMode drivingMode;
@@ -31,15 +27,10 @@ volatile int steerServoCenterOffset = defaultSteerServoCenterOffset;
 volatile int speedEscCenterOffset = defaultSpeedEscCenterOffset;
 volatile double voltageCorrectionFactor = defaultVoltageCorrectionFactor;
 volatile double currentCorrectionFactor = defaultCurrentCorrectionFactor;
-volatile double calibrated_angle_roll_acc = defaultCalibratedRollAngleAcc;
-volatile double calibrated_angle_pitch_acc = defaultCalibratedPitchAngleAcc; 
 
 volatile double yaw_level_adjust;
 volatile double gyro_roll_input, gyro_pitch_input, gyro_yaw_input;
 volatile double pid_yaw_setpoint;
-
-volatile double angle_roll_acc, angle_pitch_acc, angle_yaw_acc;
-volatile double angle_pitch, angle_roll, angle_yaw;
 
 boolean startingPointFound = false;
 float latitude, longitude, prev_latitude, prev_longitude;
@@ -54,17 +45,8 @@ TinyGPSPlus gps;
 HardwareSerial hs(2);
 
 
-PID yawPID(3.0, 0.0, 0.0, 500.0, "yaw");
+PID yawPID(defaultYawP, defaultYawI, defaultYawD, 500.0, (LOOP_TIME_TASK3/1000000.0), "yaw");
 PIDOutput yawOutputPID(&yawPID);
-
-
-// fix orientation of axis
-GYROAxis gyro_roll(&gyro_y, true);
-GYROAxis gyro_pitch(&gyro_x, true);
-GYROAxis gyro_yaw(&gyro_z, true);
-GYROAxis acc_roll(&acc_x, true);
-GYROAxis acc_pitch(&acc_y, false);
-GYROAxis acc_yaw(&acc_z, false);
 
 
 
@@ -137,9 +119,11 @@ void printProps() {
   Serial.print("\t");
   Serial.print(currentCorrectionFactor);
   Serial.print("\t");
-  Serial.print(calibrated_angle_roll_acc);  
+  Serial.print(mpu6050.getCalibrationAccX());  
   Serial.print("\t");
-  Serial.print(calibrated_angle_pitch_acc);  
+  Serial.print(mpu6050.getCalibrationAccY());  
+  Serial.print("\t");
+  Serial.print(mpu6050.getCalibrationAccZ());  
   Serial.println();  
 }
 
@@ -155,8 +139,9 @@ void loadProps() {
       speedEscCenterOffset = f.readStringUntil('\n').toInt();
       voltageCorrectionFactor = f.readStringUntil('\n').toDouble();
       currentCorrectionFactor = f.readStringUntil('\n').toDouble();
-      calibrated_angle_roll_acc = f.readStringUntil('\n').toDouble();
-      calibrated_angle_pitch_acc = f.readStringUntil('\n').toDouble();
+      mpu6050.setCalibrationAccX(f.readStringUntil('\n').toDouble());
+      mpu6050.setCalibrationAccY(f.readStringUntil('\n').toDouble());
+      mpu6050.setCalibrationAccZ(f.readStringUntil('\n').toDouble());
       f.close();
     }
   }
@@ -174,8 +159,9 @@ void saveProps() {
     f.println(String(speedEscCenterOffset));
     f.println(String(voltageCorrectionFactor, 2));
     f.println(String(currentCorrectionFactor, 2));
-    f.println(String(calibrated_angle_roll_acc, 2));
-    f.println(String(calibrated_angle_pitch_acc, 2));
+    f.println(String(mpu6050.getCalibrationAccX(), 2));
+    f.println(String(mpu6050.getCalibrationAccY(), 2));
+    f.println(String(mpu6050.getCalibrationAccZ(), 2));
     f.close();
   }
   buzzerDisabled = false;
@@ -305,14 +291,14 @@ String identifyRobot() {
     return "Green";
   } else if (isEqualID(RED_RACECAR)) {    
     return "Red";
-  } else if (isEqualID(GO_KART_PRUSA)) {    
-    return "Go-Kart Prusa";
+  } else if (isEqualID(GO_KART_ROENIE)) {    
+    return "Go-Kart ROENIE";
   } else if (isEqualID(GO_KART_PROJUNK)) {    
     return "Go-Kart Projunk";
-  } else if (isEqualID(GO_KART_ROENIE)) {    
-    return "Go-Kart Roenie";
-  } else if (isEqualID(GO_KART_THOMIE)) {    
-    return "Go-Kart Thomie";
+  } else if (isEqualID(GO_KART_Thomas)) {    
+    return "Go-Kart Thomas";
+  } else if (isEqualID(GO_KART_ProJunk)) {    
+    return "Go-Kart ProJunk";
   } else {
     return "Unknown";
   }
@@ -338,14 +324,14 @@ unsigned int getNrOfLEDStrips() {
     return 1;
   } else if (isEqualID(RED_RACECAR)) {
     return 1;
-  } else if (isEqualID(GO_KART_PRUSA)) {
+  } else if (isEqualID(GO_KART_ROENIE)) {
     return 1;
   } else if (isEqualID(GO_KART_PROJUNK)) {
     return 1;
-  } else if (isEqualID(GO_KART_ROENIE)) {
-    return 1;
-  } else if (isEqualID(GO_KART_THOMIE)) {
-    return 1;
+  } else if (isEqualID(GO_KART_Thomas)) {
+    return 2;
+  } else if (isEqualID(GO_KART_ProJunk)) {
+    return 2;
   } else {
     return 0;
   }
@@ -359,13 +345,13 @@ boolean getHasGPSSensor() {
     return true;
   } else if (isEqualID(RED_RACECAR)) {
     return true;
-  } else if (isEqualID(GO_KART_PRUSA)) {
+  } else if (isEqualID(GO_KART_ROENIE)) {
     return false;
   } else if (isEqualID(GO_KART_PROJUNK)) {
     return false;    
-  } else if (isEqualID(GO_KART_ROENIE)) {
+  } else if (isEqualID(GO_KART_Thomas)) {
     return false;    
-  } else if (isEqualID(GO_KART_THOMIE)) {
+  } else if (isEqualID(GO_KART_ProJunk)) {
     return false;    
   } else {
     return false;
@@ -380,13 +366,13 @@ boolean getHasCurrentSensor() {
     return false;
   } else if (isEqualID(RED_RACECAR)) {
     return false;
-  } else if (isEqualID(GO_KART_PRUSA)) {
+  } else if (isEqualID(GO_KART_ROENIE)) {
     return false;
   } else if (isEqualID(GO_KART_PROJUNK)) {
     return true;
-  } else if (isEqualID(GO_KART_ROENIE)) {
+  } else if (isEqualID(GO_KART_Thomas)) {
     return true;
-  } else if (isEqualID(GO_KART_THOMIE)) {
+  } else if (isEqualID(GO_KART_ProJunk)) {
     return true;
   } else {
     return false;
@@ -401,14 +387,14 @@ int getKV() {
     return 850;
   } else if (isEqualID(RED_RACECAR)) {
     return 850;
-  } else if (isEqualID(GO_KART_PRUSA)) {
+  } else if (isEqualID(GO_KART_ROENIE)) {
     return 850;
   } else if (isEqualID(GO_KART_PROJUNK)) {
     return 850;
-  } else if (isEqualID(GO_KART_ROENIE)) {
-    return 1400;
-  } else if (isEqualID(GO_KART_THOMIE)) {
-    return 1400;
+  } else if (isEqualID(GO_KART_Thomas)) {
+    return 850;
+  } else if (isEqualID(GO_KART_ProJunk)) {
+    return 360;
   } else {
     return 0;
   }
@@ -422,14 +408,14 @@ int getTireDiameter() {
     return 72;
   } else if (isEqualID(RED_RACECAR)) {
     return 72;
-  } else if (isEqualID(GO_KART_PRUSA)) {
+  } else if (isEqualID(GO_KART_ROENIE)) {
     return 70;
   } else if (isEqualID(GO_KART_PROJUNK)) {
     return 70;
-  } else if (isEqualID(GO_KART_ROENIE)) {
-    return 60;
-  } else if (isEqualID(GO_KART_THOMIE)) {
-    return 60;
+  } else if (isEqualID(GO_KART_Thomas)) {
+    return 84;
+  } else if (isEqualID(GO_KART_ProJunk)) {
+    return 84;
   } else {
     return 0;
   }
@@ -443,14 +429,14 @@ DrivingMode getDefaultDrivingMode() {
     return dmHalfSpeed;
   } else if (isEqualID(RED_RACECAR)) {
     return dmHalfSpeed;
-  } else if (isEqualID(GO_KART_PRUSA)) {
+  } else if (isEqualID(GO_KART_ROENIE)) {
     return dmHalfSpeed;
   } else if (isEqualID(GO_KART_PROJUNK)) {
     return dmHalfSpeed;
-  } else if (isEqualID(GO_KART_ROENIE)) {
+  } else if (isEqualID(GO_KART_Thomas)) {
     return dmHalfSpeed;
-  } else if (isEqualID(GO_KART_THOMIE)) {
-    return dmFullSpeed;
+  } else if (isEqualID(GO_KART_ProJunk)) {
+    return dmHalfSpeed;
   } else {
     return dmFullSpeed;
   }
@@ -466,229 +452,30 @@ int fixChannelDirection(int prmChannel, boolean prmReversed) {
 }
 
 
-bool is_mpu_6050_found() {
-  Wire.beginTransmission(0x68);
-  return Wire.endTransmission() == 0;
-} 
-
-
-void setup_mpu_6050_registers() {
-  if (!mpu_6050_found) return;
-  //Activate the MPU-6050
-  Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
-  Wire.write(0x6B);                                                    //Send the requested starting register
-  Wire.write(0x00);                                                    //Set the requested starting register
-  Wire.endTransmission();                                              //End the transmission
-  //Configure the accelerometer (+/-8g)
-  Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
-  Wire.write(0x1C);                                                    //Send the requested starting register
-  Wire.write(0x10);                                                    //Set the requested starting register
-  Wire.endTransmission();                                              //End the transmission
-  //Configure the gyro (500dps full scale)
-  Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
-  Wire.write(0x1B);                                                    //Send the requested starting register
-  Wire.write(0x08);                                                    //Set the requested starting register
-  Wire.endTransmission();                                              //End the transmission
-}
-
-
-void read_mpu_6050_data() {   
-  if (mpu_6050_found) {
-    Wire.beginTransmission(0x68);                                        //Start communicating with the MPU-6050
-    Wire.write(0x3B);                                                    //Send the requested starting register
-    Wire.endTransmission();                                              //End the transmission
-    Wire.requestFrom(0x68,14);                                           //Request 14 bytes from the MPU-6050
-    while(Wire.available() < 14);                                        //Wait until all the bytes are received
-    acc_x = Wire.read()<<8 | Wire.read();                                //Add the low and high byte to the acc_x variable
-    acc_y = Wire.read()<<8 | Wire.read();                                //Add the low and high byte to the acc_y variable
-    acc_z = Wire.read()<<8 | Wire.read();                                //Add the low and high byte to the acc_z variable
-    temperature = Wire.read()<<8 | Wire.read();                          //Add the low and high byte to the temperature variable
-    gyro_x = Wire.read()<<8 | Wire.read();                               //Add the low and high byte to the gyro_x variable
-    gyro_y = Wire.read()<<8 | Wire.read();                               //Add the low and high byte to the gyro_y variable
-    gyro_z = Wire.read()<<8 | Wire.read();                               //Add the low and high byte to the gyro_z variable
-  } else {
-    acc_x = 0;
-    acc_y = 0;
-    acc_z = 0;
-    temperature = 0;
-    gyro_x = 0;
-    gyro_y = 0;
-    gyro_z = 0;
-  }
-}
-
-
-void calibrate_mpu_6050() {
-  if (mpu_6050_found) {
-    for (int cal_int = 0; cal_int < GYRO_CALIBRATION_COUNT ; cal_int ++) {                  //Run this code GYRO_CALIBRATION_COUNT times
-      read_mpu_6050_data();                                              //Read the raw acc and gyro data from the MPU-6050
-      gyro_x_cal += gyro_x;                                              //Add the gyro x-axis offset to the gyro_x_cal variable
-      gyro_y_cal += gyro_y;                                              //Add the gyro y-axis offset to the gyro_y_cal variable
-      gyro_z_cal += gyro_z;                                              //Add the gyro z-axis offset to the gyro_z_cal variable
-      delay(3);                                                          //Delay 3us to simulate the 250Hz program loop
-    }
-    gyro_x_cal /= GYRO_CALIBRATION_COUNT;                                //Divide the gyro_x_cal variable by GYRO_CALIBRATION_COUNT to get the avarage offset
-    gyro_y_cal /= GYRO_CALIBRATION_COUNT;                                //Divide the gyro_y_cal variable by GYRO_CALIBRATION_COUNT to get the avarage offset
-    gyro_z_cal /= GYRO_CALIBRATION_COUNT;                                //Divide the gyro_z_cal variable by GYRO_CALIBRATION_COUNT to get the avarage offset  
-  } else {
-    gyro_x_cal = 0;
-    gyro_y_cal = 0;
-    gyro_z_cal = 0;
-  }
-
-  Serial.print("gyro_x_cal:\t");
-  Serial.print(gyro_x_cal);
-  Serial.print("\tgyro_y_cal:\t");
-  Serial.print(gyro_y_cal);
-  Serial.print("\tgyro_z_cal:\t");
-  Serial.println(gyro_z_cal);
-}
-
-
-float getTempCelsius() {
-  return 36.53 + temperature/340.0;
-}
-
-
-void print_gyro_values() {
-  /*
-  Serial.print("acc_x:\t");
-  Serial.print(acc_x);
-  Serial.print("\tacc_y:\t");
-  Serial.print(acc_y);
-  Serial.print("\tacc_z:\t");
-  Serial.print(acc_z);
-*/
-  Serial.print("\ttemp:\t");
-  Serial.print(getTempCelsius());
-
-  Serial.print("\tgyro_x:\t");
-  Serial.print(gyro_x);
-  Serial.print("\tgyro_y:\t");
-  Serial.print(gyro_y);
-  Serial.print("\tgyro_z:\t");
-  Serial.println(gyro_z);
-}
-
-
-double calcDegreesPerSecond(double prmGyroAxisInput, double prmGyroAxis) {
-  return (prmGyroAxisInput * 0.8) + ((prmGyroAxis / 57.14286) * 0.2);  
-}
-
-
-void calibrateAcc() {
-  // calibrate angle_pitch_acc and angle_roll_acc; model needs to stand horizontal
-  buzzerDisabled = true;
-  unsigned long calibrationLoopTimer = micros();
-  double anglePitchAcc = 0.0;
-  double angleRollAcc = 0.0;
-  double sumPitchAcc = 0.0;
-  double sumRollAcc = 0.0;
-  long count = 1*1000*1000/LOOP_TIME_TASK3;
-
-  for (long i = 0; i < count; i++) {
-    double accTotalVector = sqrt((acc_roll.get()*acc_roll.get())+(acc_pitch.get()*acc_pitch.get())+(acc_yaw.get()*acc_yaw.get()));
-
-    if(abs(acc_pitch.get()) < accTotalVector) {
-      anglePitchAcc = toDegrees(-1.0*asin((double)acc_pitch.get()/accTotalVector));
-    }
-    if(abs(acc_roll.get()) < accTotalVector) {
-      angleRollAcc = toDegrees(-1.0*asin((double)acc_roll.get()/accTotalVector));
-    }
-
-    sumPitchAcc += anglePitchAcc;
-    sumRollAcc += angleRollAcc;
-   
-    while(micros() - calibrationLoopTimer < LOOP_TIME_TASK3) {
-      vTaskDelay(1);
-    };
-    calibrationLoopTimer = micros();
-  } 
-
-  double avgPitchAcc = sumPitchAcc/count;
-  double avgRollAcc = sumRollAcc/count;
-
-  Serial.print(avgRollAcc);
-  Serial.print("\t");
-  Serial.print(avgPitchAcc);
-  Serial.println();
-  
-  calibrated_angle_roll_acc = avgRollAcc;
-  calibrated_angle_pitch_acc = avgPitchAcc;
-
-  buzzerDisabled = false;
-}
-
-
 double getLoopTimeHz(int prmLoopTime) {
   return 1000000.0 / prmLoopTime;
 }
 
 
-void calcAngles() {
-  double factor = 1.0/(getLoopTimeHz(LOOP_TIME_TASK3) * 65.5);
-  angle_pitch += gyro_pitch.get() * factor;
-  angle_roll += gyro_roll.get() * factor;
-  angle_yaw += gyro_yaw.get() * factor;
-
-  angle_pitch -= angle_roll * sin(gyro_yaw.get() * 0.000001066);
-  angle_roll += angle_pitch * sin(gyro_yaw.get() * 0.000001066);
-  
-  double acc_total_vector = sqrt((acc_roll.get()*acc_roll.get())+(acc_pitch.get()*acc_pitch.get())+(acc_yaw.get()*acc_yaw.get()));
-
-  if(abs(acc_pitch.get()) < acc_total_vector) {
-    angle_pitch_acc = toDegrees(-1.0*asin((double)acc_pitch.get()/acc_total_vector));
-  }
-  if(abs(acc_roll.get()) < acc_total_vector) {
-    angle_roll_acc = toDegrees(-1.0*asin((double)acc_roll.get()/acc_total_vector));
-  }
-
-  // Accelerometer calibration values 
-  angle_pitch_acc -= calibrated_angle_pitch_acc;
-  angle_roll_acc -= calibrated_angle_roll_acc;
-  angle_yaw_acc = 0.0;
-
-  // Correct the drift of the gyro pitch angle with the accelerometer pitch/roll angle.
-  angle_pitch = angle_pitch * (1.0-driftCorrectionFactor) + angle_pitch_acc * driftCorrectionFactor;
-  angle_roll = angle_roll * (1.0-driftCorrectionFactor) + angle_roll_acc * driftCorrectionFactor;
-}  
-
-
-double calcPidSetPoint(int prmChannel, double prmLevelAdjust) {
-  double rval = 0.0;
-
-  if (prmChannel > (MID_CHANNEL + DEADBAND_HALF)) {
-    rval = prmChannel - (MID_CHANNEL + DEADBAND_HALF);
-  } else if (prmChannel < (MID_CHANNEL - DEADBAND_HALF)) {
-    rval = prmChannel - (MID_CHANNEL - DEADBAND_HALF);
-  }
-
-  if (abs(prmLevelAdjust) > eps) {
-    //Subtract the angle correction from the standarized receiver input value.
-    rval -= prmLevelAdjust;
-
-    //Divide the setpoint for the PID controller by 3 to get angles in degrees.
-    rval /= 3.0;
-  }
-
-  return rval;
+double calcPidSetPoint(int prmChannel) {
+  return prmChannel - MID_CHANNEL;
 }
 
 
 void PIDOutput::calc(double prmGyroAxisInput, double prmSetPoint) {
   output = 0.0;
-  error = prmGyroAxisInput - prmSetPoint;
+  error = prmSetPoint - prmGyroAxisInput;
 
   P = pid->getP() * error;
 
-  I = prevI + pid->getI() * error;
+  I = prevI + pid->getI() * (error + prevError) * pid->getLoopTime() / 2;
   if (I > pid->getMax()) I = pid->getMax();
   else if (I < pid->getMax() * -1) I = pid->getMax() * -1;
 
-  D = pid->getD() * (error - prevError);
+  D = pid->getD() * (error - prevError) / pid->getLoopTime();
   output = P + I + D;
-  if(output > pid->getMax()) output = pid->getMax();
-  else if(output < pid->getMax() * -1) output = pid->getMax() * -1;
+  if (output > pid->getMax()) output = pid->getMax();
+  else if (output < pid->getMax() * -1) output = pid->getMax() * -1;
 
   prevError = error;
   prevI = I;
@@ -764,11 +551,14 @@ bool isArmed() {
 
 
 void initValues() {
+  gyro_roll_input = 0.0;
+  gyro_pitch_input = 0.0;    
   gyro_yaw_input = 0.0;
 
-  angle_pitch = angle_pitch_acc;
-  angle_roll = angle_roll_acc;
-
+  angle_roll = mpu6050.getAngleRollAcc();
+  angle_pitch = mpu6050.getAnglePitchAcc();
+  angle_yaw = 0.0;
+  
   yawOutputPID.reset();
 }
 
@@ -803,7 +593,9 @@ void playShortBeep() {
 
 
 void playLowVoltageAlarm() {
-  playTune("LowVoltageAlarm:d=16,o=5,b=140:c6,P,c5,P,c6,P,c5,P");
+  if (isVoltageAlarmEnabled) {
+    playTune("LowVoltageAlarm:d=16,o=5,b=140:c6,P,c5,P,c6,P,c5,P");
+  }
 }
 
 
@@ -1023,7 +815,7 @@ void updateLEDs() {
     if (steer_input < -3) {
       for (unsigned int i=0; i<strip->PixelCount(); i++){
         if (i >= nrOfSteerIndicatorPixels) {
-          strip->SetPixelColor(i, black);
+          strip->SetPixelColor(i, throttleStateColor);
         } else {
           strip->SetPixelColor(i, steeringStateColor);          
         }
@@ -1033,7 +825,7 @@ void updateLEDs() {
     if (steer_input > 3) {
       for (unsigned int i=0; i<strip->PixelCount(); i++){
         if (i < strip->PixelCount()-nrOfSteerIndicatorPixels) {
-          strip->SetPixelColor(i, black);
+          strip->SetPixelColor(i, throttleStateColor);
         } else {
           strip->SetPixelColor(i, steeringStateColor);          
         }
@@ -1237,25 +1029,33 @@ String getBSSID(uint8_t* prmStrongestBssid) {
 }
 
 
-uint8_t* getChannelWithStrongestSignal(String prmSSID, int32_t *prmStrongestChannel) {
+uint8_t* getChannelWithStrongestSignal(String prmSSID[], int prmNrOfSSIDs, int32_t *prmStrongestChannel, int *prmStrongestSSIDIndex) {
   Serial.println("getChannelWithStrongestSignal ...............");
   byte available_networks = WiFi.scanNetworks();
 
   uint8_t* strongestBssid = NULL;
   int32_t rssiMax = -2147483648;
   *prmStrongestChannel = -1;
+  *prmStrongestSSIDIndex = -1;
   for (int network = 0; network < available_networks; network++) {
-    if (WiFi.SSID(network).equalsIgnoreCase(prmSSID)) {
-      if (WiFi.RSSI(network) > rssiMax) {
-        rssiMax = WiFi.RSSI(network);
-        strongestBssid = WiFi.BSSID(network);
-        *prmStrongestChannel = WiFi.channel(network);
+    for (int i = 0; i < prmNrOfSSIDs; i++) {
+      if (WiFi.SSID(network).equalsIgnoreCase(prmSSID[i])) {
+        if (WiFi.RSSI(network) > rssiMax) {
+          rssiMax = WiFi.RSSI(network);
+          strongestBssid = WiFi.BSSID(network);
+          *prmStrongestSSIDIndex = i;
+          *prmStrongestChannel = WiFi.channel(network);
+        }
       }
     }    
   }
 
   printInt(rssiMax, "rssiMax", "dB");          
   printInt(*prmStrongestChannel, "StrongestChannel", "");
+  printInt(*prmStrongestSSIDIndex, "StrongestSSIDIndex", "");
+  if (*prmStrongestSSIDIndex != -1) {
+    printString(prmSSID[*prmStrongestSSIDIndex], "StrongestSSID", "");  
+  }
   printString(getBSSID(strongestBssid), "StrongestBssid", "");  
   Serial.println();
 
@@ -1428,6 +1228,8 @@ String getHtmlHeader() {
 
   s += "  <style>";
   s += "    table, th, td {border: 1px solid black; border-collapse: collapse;}";
+  s += "    th { height: " ROW_HEIGHT_TH "; font-size: " FONT_SIZE_TH ";}";
+  s += "    td { height: " ROW_HEIGHT_TD "; font-size: " FONT_SIZE_TD ";}";
   s += "    tr:nth-child(even) { background-color: #eee }";
   s += "    tr:nth-child(odd) { background-color: #fff;}";
   s += "    td:first-child { background-color: lightgrey; color: black;}";
@@ -1437,8 +1239,8 @@ String getHtmlHeader() {
   s += "  <style>";
   s += "    html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}";
   s += "    .button { border-radius: 12px; background-color: grey; border: none; color: white; padding: 16px 40px;";
-  s += "    text-decoration: none; font-size: 20px; margin: 10px; cursor: pointer;}";
-  s += "    .progress-bar{float:left;width:0%;height:100%;font-size:16px;line-height:20px;color:#fff;text-align:center;background-color:#337ab7;-webkit-box-shadow:inset 0 -1px 0 rgba(0,0,0,.15);box-shadow:inset 0 -1px 0 rgba(0,0,0,.15);-webkit-transition:width .6s ease;-o-transition:width .6s ease;transition:width .6s ease}";
+  s += "    text-decoration: none; font-size:" FONT_SIZE_BUTTON "; margin: 10px; cursor: pointer;}";
+  s += "    .progress-bar{float:left;width:0%;height:100%;font-size:" FONT_SIZE_TD ";line-height:" LINE_HEIGHT_TD ";color:#fff;text-align:center;background-color:#337ab7;-webkit-box-shadow:inset 0 -1px 0 rgba(0,0,0,.15);box-shadow:inset 0 -1px 0 rgba(0,0,0,.15);-webkit-transition:width .6s ease;-o-transition:width .6s ease;transition:width .6s ease}";
   s += "    .progress-bar-success{background-color:#5cb85c}";
   s += "    .progress-bar-warning{background-color:#f0ad4e}";
   s += "    .progress-bar-danger{background-color:#d9534f}";
@@ -1453,7 +1255,7 @@ String getHtmlHeader() {
   s += "  <style>";
   s += "    .progress {";
   s += "        position: relative;";
-  s += "        height:20px;";
+  s += "        height:" ROW_HEIGHT_TD ";";
   s += "    }";
   s += "    .progress span {";
   s += "        position: absolute;";
@@ -1816,9 +1618,10 @@ String getScript(String prmToBeClickedTabButton) {
   s += "  var speedEscCenterOffset =  getNameValue(\"" + getIdFromName(NAME_SPEED_ESC_CENTER_OFFSET) + "\");";
   s += "  var voltageCorrectionFactor =  getNameValue(\"" + getIdFromName(NAME_VOLTAGE_CORRECTION) + "\");";
   s += "  var currentCorrectionFactor =  getNameValue(\"" + getIdFromName(NAME_CURRENT_CORRECTION) + "\");";
-  s += "  var calibrated_angle_roll_acc = getNameValue(\"" + getIdFromName(NAME_CALIBRATED_ROLL_ANGLE) + "\");";
-  s += "  var calibrated_angle_pitch_acc = getNameValue(\"" + getIdFromName(NAME_CALIBRATED_PITCH_ANGLE) + "\");";  
-  s += "  xhr.open(\"GET\", \"/Save?\" + yawValues + \"&\" + steerExpoFactor + \"&\" + steerServoCenterOffset + \"&\" + speedEscCenterOffset + \"&\" + voltageCorrectionFactor + \"&\" + currentCorrectionFactor + \"&\" + calibrated_angle_roll_acc + \"&\" + calibrated_angle_pitch_acc, false);";  
+  s += "  var calibrated_accX = getNameValue(\"" + getIdFromName(NAME_CALIBRATED_ACCX) + "\");";
+  s += "  var calibrated_accY = getNameValue(\"" + getIdFromName(NAME_CALIBRATED_ACCY) + "\");";  
+  s += "  var calibrated_accZ = getNameValue(\"" + getIdFromName(NAME_CALIBRATED_ACCZ) + "\");";  
+  s += "  xhr.open(\"GET\", \"/Save?\" + yawValues + \"&\" + steerExpoFactor + \"&\" + steerServoCenterOffset + \"&\" + speedEscCenterOffset + \"&\" + voltageCorrectionFactor + \"&\" + currentCorrectionFactor + \"&\" + calibrated_accX + \"&\" + calibrated_accY + \"&\" + calibrated_accZ, false);";  
   s += "  xhr.send();";
   s += "  location.reload();";
   s += "}";
@@ -1868,6 +1671,8 @@ String getWebPage(String prmToBeClickedTabButton) {
 
   String gpsStyle = hasGPSSensor ? "" : INVISIBLE_STYLE;
 
+  s += "<body>";
+
   s += "<div class=\"tab\">";
   s += "<button class=\"tablinks\" onclick=\"selectTab(event, '" + getIdFromName(NAME_TAB_TELEMETRY) + "')\" id=\"" + getIdFromName(NAME_TAB_BUTTON_TELEMETRY) + "\">" NAME_TAB_TELEMETRY "</button>";
   s += "<button " + gpsStyle + " class=\"tablinks\" onclick=\"selectTab(event, '" + getIdFromName(NAME_TAB_GPS) + "')\" id=\"" + getIdFromName(NAME_TAB_BUTTON_GPS) + "\">" NAME_TAB_GPS "</button>";
@@ -1916,7 +1721,7 @@ String getWebPage(String prmToBeClickedTabButton) {
   s += "<br>";
 
   s += "<table ALIGN=CENTER style=width:50%>";
-  s += addRow("", true, "Angle Acc", "Angle Gyro", "Level Adjust", "Input", "Setpoint", "Error", "P", "I", "D", "Output");
+  s += addRow("", true, "Angle Acc", "Angle", "Level Adjust", "Input", "Setpoint", "Error", "P", "I", "D", "Output");
   s += addRow(NAME_TELEMETRY_ROLL, false, NAME_ANGLE_ROLL_ACC, NAME_ANGLE_ROLL, NAME_ROLL_LEVEL_ADJUST, NAME_GYRO_ROLL_INPUT, NAME_PID_ROLL_SETPOINT, NAME_PID_OUTPUT_ROLL_ERROR, NAME_PID_OUTPUT_ROLL_P, NAME_PID_OUTPUT_ROLL_I, NAME_PID_OUTPUT_ROLL_D, NAME_PID_OUTPUT_ROLL);
   s += addRow(NAME_TELEMETRY_PITCH, false, NAME_ANGLE_PITCH_ACC, NAME_ANGLE_PITCH, NAME_PITCH_LEVEL_ADJUST, NAME_GYRO_PITCH_INPUT, NAME_PID_PITCH_SETPOINT, NAME_PID_OUTPUT_PITCH_ERROR, NAME_PID_OUTPUT_PITCH_P, NAME_PID_OUTPUT_PITCH_I, NAME_PID_OUTPUT_PITCH_D, NAME_PID_OUTPUT_PITCH);
   s += addRow(NAME_TELEMETRY_YAW, false, NAME_ANGLE_YAW_ACC, NAME_ANGLE_YAW, NAME_YAW_LEVEL_ADJUST, NAME_GYRO_YAW_INPUT, NAME_PID_YAW_SETPOINT, NAME_PID_OUTPUT_YAW_ERROR, NAME_PID_OUTPUT_YAW_P, NAME_PID_OUTPUT_YAW_I, NAME_PID_OUTPUT_YAW_D, NAME_PID_OUTPUT_YAW);
@@ -1971,8 +1776,9 @@ String getWebPage(String prmToBeClickedTabButton) {
   s += addRow(NAME_SPEED_ESC_CENTER_OFFSET, true, true, false, String(speedEscCenterOffset));
   s += addRow(NAME_VOLTAGE_CORRECTION, true, true, false, String(voltageCorrectionFactor, 2));
   s += addRow(NAME_CURRENT_CORRECTION, true, true, false, String(currentCorrectionFactor, 2));
-  s += addRow(NAME_CALIBRATED_ROLL_ANGLE, true, true, false, String(calibrated_angle_roll_acc, 2));
-  s += addRow(NAME_CALIBRATED_PITCH_ANGLE, true, true, false, String(calibrated_angle_pitch_acc, 2));  
+  s += addRow(NAME_CALIBRATED_ACCX, true, true, false, String(mpu6050.getCalibrationAccX(), 2));
+  s += addRow(NAME_CALIBRATED_ACCY, true, true, false, String(mpu6050.getCalibrationAccY(), 2));  
+  s += addRow(NAME_CALIBRATED_ACCZ, true, true, false, String(mpu6050.getCalibrationAccZ(), 2));  
   s += "</table>";
 
   s += "<br>";
@@ -2027,17 +1833,17 @@ String getLatestData() {
   data += "\"" + getIdFromName(NAME_USED_UP_LOOPTIME_PROGRESS_3) + "\":" + String(usedUpLoopTimeTask3) + ",";
   data += "\"" + getIdFromName(NAME_USED_UP_LOOPTIME_PROGRESS_4) + "\":" + String(usedUpLoopTimeTask4) + ",";
 
-  data += "\"" + getIdFromName(NAME_GYRO_X) + "\":" + addDQuotes(String(gyro_x)) + ",";
-  data += "\"" + getIdFromName(NAME_GYRO_Y) + "\":" + addDQuotes(String(gyro_y)) + ",";
-  data += "\"" + getIdFromName(NAME_GYRO_Z) + "\":" + addDQuotes(String(gyro_z)) + ",";
-  data += "\"" + getIdFromName(NAME_ACC_X) + "\":" + addDQuotes(String(acc_x)) + ",";
-  data += "\"" + getIdFromName(NAME_ACC_Y) + "\":" + addDQuotes(String(acc_y)) + ",";
-  data += "\"" + getIdFromName(NAME_ACC_Z) + "\":" + addDQuotes(String(acc_z)) + ",";
-  data += "\"" + getIdFromName(NAME_TEMPERATURE) + "\":" + addDQuotes(String(getTempCelsius(), 1)) + ",";
+  data += "\"" + getIdFromName(NAME_GYRO_X) + "\":" + addDQuotes(String(mpu6050.getCalibratedRateRoll())) + ",";
+  data += "\"" + getIdFromName(NAME_GYRO_Y) + "\":" + addDQuotes(String(mpu6050.getCalibratedRatePitch())) + ",";
+  data += "\"" + getIdFromName(NAME_GYRO_Z) + "\":" + addDQuotes(String(mpu6050.getCalibratedRateYaw())) + ",";
+  data += "\"" + getIdFromName(NAME_ACC_X) + "\":" + addDQuotes(String(mpu6050.getCalibratedAccX())) + ",";
+  data += "\"" + getIdFromName(NAME_ACC_Y) + "\":" + addDQuotes(String(mpu6050.getCalibratedAccY())) + ",";
+  data += "\"" + getIdFromName(NAME_ACC_Z) + "\":" + addDQuotes(String(mpu6050.getCalibratedAccZ())) + ",";
+  data += "\"" + getIdFromName(NAME_TEMPERATURE) + "\":" + addDQuotes(String(mpu6050.getTempCelsius(), 1)) + ",";
 
-  data += "\"" + getIdFromName(NAME_ANGLE_ROLL_ACC) + "\":" + addDQuotes(String(angle_roll_acc, 0)) + ",";
-  data += "\"" + getIdFromName(NAME_ANGLE_PITCH_ACC) + "\":" + addDQuotes(String(angle_pitch_acc, 0)) + ",";
-  data += "\"" + getIdFromName(NAME_ANGLE_YAW_ACC) + "\":" + addDQuotes(String(angle_yaw_acc, 0)) + ",";
+  data += "\"" + getIdFromName(NAME_ANGLE_ROLL_ACC) + "\":" + addDQuotes(String(mpu6050.getAngleRollAcc(), 0)) + ",";
+  data += "\"" + getIdFromName(NAME_ANGLE_PITCH_ACC) + "\":" + addDQuotes(String(mpu6050.getAnglePitchAcc(), 0)) + ",";
+  data += "\"" + getIdFromName(NAME_ANGLE_YAW_ACC) + "\":" + addDQuotes(String(0.0, 0)) + ",";
 
   data += "\"" + getIdFromName(NAME_ANGLE_ROLL) + "\":" + String(angle_roll, 0) + ",";
   data += "\"" + getIdFromName(NAME_ANGLE_PITCH) + "\":" + String(angle_pitch, 0) + ",";

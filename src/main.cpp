@@ -2,13 +2,15 @@
 #include <WebServer.h>
 
 
+#define NR_OF_ARRAY_ELEMS(array) ((sizeof(array))/(sizeof(array[0])))
+
 TaskHandle_t handle_task1, handle_task2, handle_task3, handle_task4;
 
 IPAddress ip(192,168,1,170);
 IPAddress gateway(192,168,1,1);
 IPAddress subnet(255,255,255,0);
-String ssid = WIFI_SSID;
-String password = WIFI_PASSWORD;
+String ssid[] = WIFI_SSID;
+String password[] = WIFI_PASSWORD;
 
 IPAddress AP_ip(192,168,8,1);
 IPAddress AP_gateway(192,168,8,1);
@@ -41,8 +43,9 @@ void saveHandler() {
   speedEscCenterOffset = checkCenterOffset(server.arg(getIdFromName(NAME_SPEED_ESC_CENTER_OFFSET)).toInt());
   voltageCorrectionFactor = server.arg(getIdFromName(NAME_VOLTAGE_CORRECTION)).toDouble();
   currentCorrectionFactor = server.arg(getIdFromName(NAME_CURRENT_CORRECTION)).toDouble();
-  calibrated_angle_roll_acc = server.arg(getIdFromName(NAME_CALIBRATED_ROLL_ANGLE)).toDouble();
-  calibrated_angle_pitch_acc = server.arg(getIdFromName(NAME_CALIBRATED_PITCH_ANGLE)).toDouble();
+  mpu6050.setCalibrationAccX(server.arg(getIdFromName(NAME_CALIBRATED_ACCX)).toDouble());
+  mpu6050.setCalibrationAccY(server.arg(getIdFromName(NAME_CALIBRATED_ACCY)).toDouble());
+  mpu6050.setCalibrationAccZ(server.arg(getIdFromName(NAME_CALIBRATED_ACCZ)).toDouble());
   printProps();
   saveProps();
 
@@ -63,7 +66,9 @@ void cancelHandler() {
 
 void calibrateAccHandler() {
   Serial.println("/CalibrateAcc");
-  calibrateAcc();
+  vTaskSuspend(handle_task3);
+  mpu6050.calibrateAcc();
+  vTaskResume(handle_task3);
   saveProps();
   activeTab = NAME_TAB_BUTTON_SETTINGS;
   REDIRECT_TO_ROOT;
@@ -96,8 +101,9 @@ void defaultsHandler() {
   speedEscCenterOffset = defaultSpeedEscCenterOffset;
   voltageCorrectionFactor = defaultVoltageCorrectionFactor;
   currentCorrectionFactor = defaultCurrentCorrectionFactor;
-  calibrated_angle_roll_acc = defaultCalibratedRollAngleAcc;
-  calibrated_angle_pitch_acc = defaultCalibratedPitchAngleAcc;    
+  mpu6050.setCalibrationAccX(0.0);
+  mpu6050.setCalibrationAccY(0.0);
+  mpu6050.setCalibrationAccZ(0.0);
   printProps();
   saveProps();
 
@@ -187,9 +193,10 @@ void setup() {
     CORE1);
 
   int32_t strongestChannel;
+  int strongestSSIDIndex;
   uint8_t* strongestBssid;
-
-  strongestBssid = getChannelWithStrongestSignal(ssid, &strongestChannel);
+  
+  strongestBssid = getChannelWithStrongestSignal(ssid, NR_OF_ARRAY_ELEMS(ssid), &strongestChannel, &strongestSSIDIndex);
   if (strongestBssid == NULL) {
     // standalone accesspoint
     WiFi.onEvent(WiFiAPStarted, WiFiEvent_t::ARDUINO_EVENT_WIFI_AP_START);
@@ -216,7 +223,7 @@ void setup() {
     // disable power safe for performance (low latency)
     esp_wifi_set_ps(WIFI_PS_NONE);
 
-    WiFi.begin(ssid.c_str(), password.c_str(), strongestChannel, strongestBssid, true);
+    WiFi.begin(ssid[strongestSSIDIndex].c_str(), password[strongestSSIDIndex].c_str(), strongestChannel, strongestBssid, true);
     while (WiFi.status() != WL_CONNECTED) {
       Serial.print(".");
       delay(500);
@@ -224,6 +231,9 @@ void setup() {
     Serial.println();
     Serial.print("IP address: ");
     Serial.println(ip);
+
+    // disable voltage alarm
+    isVoltageAlarmEnabled = false;
   }
 
   Serial.println("WebServer startup");

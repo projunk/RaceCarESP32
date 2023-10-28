@@ -13,12 +13,13 @@
 #include <esp_wifi.h>
 #include <driver\adc.h>
 #include <TinyGPS++.h>
+#include <mpu6050.h>
 #include <..\..\MyCommon\Credentials.h>
 
 
 #define eps                         0.00001
 
-#define RACECAR_VERSION             "1.8"
+#define RACECAR_VERSION             "2.3c"
 
 // CORE0 is used by WIFI
 #define CORE0                       0
@@ -37,7 +38,6 @@
 
 #define SIGNAL_TIMEOUT              24000    // microseconds
 
-#define GYRO_CALIBRATION_COUNT      250
 
 #define MIN_GPS_SATELLITES          4
 #define MIN_GPS_DISTANCE            50.0  // m
@@ -154,8 +154,9 @@
 #define NAME_SPEED_ESC_CENTER_OFFSET "Speed Esc Center Offset"
 #define NAME_VOLTAGE_CORRECTION     "Voltage Correction Factor"
 #define NAME_CURRENT_CORRECTION     "Current Correction Factor"
-#define NAME_CALIBRATED_ROLL_ANGLE  "Calibrated Roll Angle"
-#define NAME_CALIBRATED_PITCH_ANGLE "Calibrated Pitch Angle"
+#define NAME_CALIBRATED_ACCX        "Calibrated AccX"
+#define NAME_CALIBRATED_ACCY        "Calibrated AccY"
+#define NAME_CALIBRATED_ACCZ        "Calibrated AccZ"
 
 #define NAME_PID_SETTINGS_YAW       "Yaw"
 
@@ -235,6 +236,13 @@
 #define TELEMETRY_RECEIVE_TIMEOUT     "1000"
 #define IS_ALIVE_REFRESH_INTERVAL     "100"
 
+#define ROW_HEIGHT_TH                 "20px"
+#define ROW_HEIGHT_TD                 "18px"
+#define LINE_HEIGHT_TD                "18px"
+#define FONT_SIZE_TH                  "15px"
+#define FONT_SIZE_TD                  "12px"
+#define FONT_SIZE_BUTTON              "20px"
+
 
 enum DrivingMode {
   dmHalfSpeed,
@@ -251,13 +259,10 @@ extern volatile bool signal_detected, prev_signal_detected;
 extern volatile bool is_armed;
 extern volatile float voltage, current;
 extern volatile int nrOfCells;
-extern volatile short gyro_x, gyro_y, gyro_z;
-extern volatile short acc_x, acc_y, acc_z;
-extern volatile short temperature;
-extern long gyro_x_cal, gyro_y_cal, gyro_z_cal;
-extern volatile double angle_roll_acc, angle_pitch_acc, angle_yaw_acc;
-extern volatile double angle_pitch, angle_roll, angle_yaw;
-extern volatile double calibrated_angle_roll_acc, calibrated_angle_pitch_acc;
+extern MPU6050 mpu6050;
+extern volatile double angle_roll;
+extern volatile double angle_pitch;
+extern volatile double angle_yaw;
 extern volatile double yaw_level_adjust;
 extern volatile double gyro_roll_input, gyro_pitch_input, gyro_yaw_input;
 extern volatile double pid_yaw_setpoint;
@@ -265,8 +270,7 @@ extern volatile double pid_yaw_setpoint;
 extern volatile unsigned long signal_micros_timer_value;
 extern volatile int steerServo, leftEscs, rightEscs;
 extern int speed_input, steer_input, leftSpeedSteer, rightSpeedSteer;
-extern int lowVoltageAlarmCount;
-extern bool mpu_6050_found;
+extern bool isVoltageAlarmEnabled;
 extern bool hasGPSSensor;
 extern bool hasCurrentSensor;
 extern DrivingMode drivingMode;
@@ -291,10 +295,10 @@ extern volatile double currentCorrectionFactor;
 const uint8_t BREADBOARD_RACECAR[UniqueIDsize] = {0xF0, 0x08, 0xD1, 0xD2, 0x7F, 0x3C};
 const uint8_t GREEN_RACECAR[UniqueIDsize] = {0x24, 0x62, 0xAB, 0xD5, 0x21, 0x18};
 const uint8_t RED_RACECAR[UniqueIDsize] = {0xF0, 0x08, 0xD1, 0xD2, 0x7C, 0xAC};
-const uint8_t GO_KART_PRUSA[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF1, 0x97, 0x74};
+const uint8_t GO_KART_ROENIE[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF1, 0x97, 0x74};
 const uint8_t GO_KART_PROJUNK[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF1, 0xC8, 0xA8};
-const uint8_t GO_KART_ROENIE[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF0, 0x89, 0x98};
-const uint8_t GO_KART_THOMIE[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF9, 0xFB, 0x7C};
+const uint8_t GO_KART_Thomas[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF0, 0x89, 0x98};
+const uint8_t GO_KART_ProJunk[UniqueIDsize] = {0x7C, 0x9E, 0xBD, 0xF9, 0xFB, 0x7C};
 
 
 #define colorSaturation 128
@@ -307,10 +311,9 @@ const RgbColor grey(10, 10, 10);
 const RgbColor black(0);
 
 
-const double defaultCalibratedRollAngleAcc = 0.0;
-const double defaultCalibratedPitchAngleAcc = 0.0;
-
-const double driftCorrectionFactor = 0.001; //0.004
+const double defaultCalibratedAccX = 0.0;
+const double defaultCalibratedAccY = 0.0;
+const double defaultCalibratedAccZ = 0.0;
 
 const boolean throttleChannelReversed = false;
 const boolean yawChannelReversed = false;
@@ -323,6 +326,10 @@ const int defaultSteerServoCenterOffset = 0;
 const int defaultSpeedEscCenterOffset = 0;
 const double defaultVoltageCorrectionFactor = 1.0;
 const double defaultCurrentCorrectionFactor = 1.0;
+
+const double defaultYawP = 1.5;
+const double defaultYawI = 0.0;
+const double defaultYawD = 0.0;
 
 const int MIN_RESPONSE_TIME = 0;
 const int WARNING_RESPONSE_TIME = 500;
@@ -353,15 +360,17 @@ class PID {
         double I;
         double D;
         double max;
+        double loopTime;
         String fname;
     public:
         PID() {}
-        PID(double prmP, double prmI, double prmD, double prmMax, String prmFName) : defaultP(prmP), defaultI(prmI), defaultD(prmD), defaultMax(prmMax), P(prmP), I(prmI), D(prmD), max(prmMax), fname(prmFName) {}
+        PID(double prmP, double prmI, double prmD, double prmMax, double prmLoopTime, String prmFName) : defaultP(prmP), defaultI(prmI), defaultD(prmD), defaultMax(prmMax), P(prmP), I(prmI), D(prmD), max(prmMax), loopTime(prmLoopTime), fname(prmFName) {}
         void set(String prmP, String prmI, String prmD, String prmMax) { P = prmP.toDouble(); I = prmI.toDouble() ; D = prmD.toDouble(); max = prmMax.toDouble(); }
         double getP() { return P; }
         double getI() { return I; }
         double getD() { return D; }
         double getMax() { return max; }
+        double getLoopTime() { return loopTime; }
         void resetToDefault() { P = defaultP; I = defaultI, D = defaultD, max = defaultMax; }
         void load();
         void save();
@@ -391,25 +400,8 @@ class PIDOutput {
 };
 
 
-class GYROAxis {
-    private:
-        volatile short *axis;
-        bool isReversed;
-    public:
-        GYROAxis(volatile short *prmAxis, bool prmIsReversed) : axis(prmAxis), isReversed(prmIsReversed) {}
-        double get() { return isReversed ? -1*(*axis) : *axis; }
-};
-
-
 extern PID yawPID;
 extern PIDOutput yawOutputPID;
-
-extern GYROAxis gyro_roll;
-extern GYROAxis gyro_pitch;
-extern GYROAxis gyro_yaw;
-extern GYROAxis acc_roll;
-extern GYROAxis acc_pitch;
-extern GYROAxis acc_yaw;
 
 extern double LowPassFilter(const double prmAlpha, const double prmCurrentValue, const double prmPreviousValue);
 extern double checkExpo(const double prmExpoFactor);
@@ -433,16 +425,8 @@ extern boolean getHasGPSSensor();
 extern boolean getHasCurrentSensor();
 extern DrivingMode getDefaultDrivingMode();
 extern int fixChannelDirection(int prmChannel, boolean prmReversed);
-extern bool is_mpu_6050_found();
-extern void setup_mpu_6050_registers();
-extern void read_mpu_6050_data();
-extern void calibrate_mpu_6050();
-extern float getTempCelsius();
-extern void print_gyro_values();
-extern double calcDegreesPerSecond(double prmGyroAxisInput, double prmGyroAxis);
-extern void calibrateAcc();
-extern void calcAngles();
-extern double calcPidSetPoint(int prmChannel, double prmLevelAdjust);
+extern double getLoopTimeHz(int prmLoopTime);
+extern double calcPidSetPoint(int prmChannel);
 extern int limitServo(int prmPulse);
 extern void checkIsArmed();
 extern bool isArmed();
@@ -473,7 +457,7 @@ extern void initLEDs();
 extern void updateLEDs();
 extern void print_signals();
 extern void print_calculated_values();
-extern uint8_t* getChannelWithStrongestSignal(String prmSSID, int32_t *prmStrongestChannel);
+extern uint8_t* getChannelWithStrongestSignal(String prmSSID[], int prmNrOfSSIDs, int32_t *prmStrongestChannel, int *prmStrongsetSSIDIndex);
 extern void task1(void *parameter);
 extern void task2(void *parameter);
 extern void task3(void *parameter);
