@@ -19,7 +19,7 @@
 
 #define eps                         0.00001
 
-#define RACECAR_VERSION             "2.3c"
+#define RACECAR_VERSION             "2.3d"
 
 // CORE0 is used by WIFI
 #define CORE0                       0
@@ -260,9 +260,9 @@ extern volatile bool is_armed;
 extern volatile float voltage, current;
 extern volatile int nrOfCells;
 extern MPU6050 mpu6050;
-extern volatile double angle_roll;
-extern volatile double angle_pitch;
-extern volatile double angle_yaw;
+extern volatile double kalmanAngleRoll;
+extern volatile double kalmanAnglePitch;
+extern volatile double yawAngle;
 extern volatile double yaw_level_adjust;
 extern volatile double gyro_roll_input, gyro_pitch_input, gyro_yaw_input;
 extern volatile double pid_yaw_setpoint;
@@ -327,7 +327,7 @@ const int defaultSpeedEscCenterOffset = 0;
 const double defaultVoltageCorrectionFactor = 1.0;
 const double defaultCurrentCorrectionFactor = 1.0;
 
-const double defaultYawP = 1.5;
+const double defaultYawP = 0.8;
 const double defaultYawI = 0.0;
 const double defaultYawD = 0.0;
 
@@ -426,7 +426,6 @@ extern boolean getHasCurrentSensor();
 extern DrivingMode getDefaultDrivingMode();
 extern int fixChannelDirection(int prmChannel, boolean prmReversed);
 extern double getLoopTimeHz(int prmLoopTime);
-extern double calcPidSetPoint(int prmChannel);
 extern int limitServo(int prmPulse);
 extern void checkIsArmed();
 extern bool isArmed();

@@ -457,11 +457,6 @@ double getLoopTimeHz(int prmLoopTime) {
 }
 
 
-double calcPidSetPoint(int prmChannel) {
-  return prmChannel - MID_CHANNEL;
-}
-
-
 void PIDOutput::calc(double prmGyroAxisInput, double prmSetPoint) {
   output = 0.0;
   error = prmSetPoint - prmGyroAxisInput;
@@ -555,9 +550,9 @@ void initValues() {
   gyro_pitch_input = 0.0;    
   gyro_yaw_input = 0.0;
 
-  angle_roll = mpu6050.getAngleRollAcc();
-  angle_pitch = mpu6050.getAnglePitchAcc();
-  angle_yaw = 0.0;
+  kalmanAngleRoll = mpu6050.getAngleRollAcc();
+  kalmanAnglePitch = mpu6050.getAnglePitchAcc();
+  yawAngle = 0.0;
   
   yawOutputPID.reset();
 }
@@ -660,7 +655,7 @@ void calcMotorValues(int prmYawChannel, int prmThrottleChannel) {
       rightSpeedSteer = speed_input;        
       leftSpeedSteer = map(steer_input, MIN_STEER, 0, MIN_STEER_FACTOR*rightSpeedSteer, rightSpeedSteer);          
     }
-    steerServo = limitServo(MID_CHANNEL + yawOutputPID.getOutput() + steerServoCenterOffset);
+    steerServo = limitServo(MID_CHANNEL-(prmYawChannel-MID_CHANNEL) + yawOutputPID.getOutput() + steerServoCenterOffset);
     leftEscs = map(leftSpeedSteer + speedEscCenterOffset, MIN_SPEED, MAX_SPEED, getMinSpeed(), getMaxSpeed());
     rightEscs = map(rightSpeedSteer + speedEscCenterOffset, MIN_SPEED, MAX_SPEED, getMinSpeed(), getMaxSpeed());        
   } else {
@@ -1845,9 +1840,9 @@ String getLatestData() {
   data += "\"" + getIdFromName(NAME_ANGLE_PITCH_ACC) + "\":" + addDQuotes(String(mpu6050.getAnglePitchAcc(), 0)) + ",";
   data += "\"" + getIdFromName(NAME_ANGLE_YAW_ACC) + "\":" + addDQuotes(String(0.0, 0)) + ",";
 
-  data += "\"" + getIdFromName(NAME_ANGLE_ROLL) + "\":" + String(angle_roll, 0) + ",";
-  data += "\"" + getIdFromName(NAME_ANGLE_PITCH) + "\":" + String(angle_pitch, 0) + ",";
-  data += "\"" + getIdFromName(NAME_ANGLE_YAW) + "\":" + String(angle_yaw, 0) + ",";
+  data += "\"" + getIdFromName(NAME_ANGLE_ROLL) + "\":" + String(kalmanAngleRoll, 0) + ",";
+  data += "\"" + getIdFromName(NAME_ANGLE_PITCH) + "\":" + String(kalmanAnglePitch, 0) + ",";
+  data += "\"" + getIdFromName(NAME_ANGLE_YAW) + "\":" + String(yawAngle, 0) + ",";
 
   data += "\"" + getIdFromName(NAME_YAW_LEVEL_ADJUST) + "\":" + String(yaw_level_adjust, 2) + ",";
 

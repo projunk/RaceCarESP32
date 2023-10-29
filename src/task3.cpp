@@ -7,15 +7,13 @@ volatile unsigned long usedUpLoopTimeTask3;
 MPU6050 mpu6050(angle_180);
 
 double factor = 1.0 / (getLoopTimeHz(LOOP_TIME_TASK3));
-volatile double angle_roll = 0.0;
-volatile double angle_pitch = 0.0;
-volatile double angle_yaw = 0.0;
+volatile double kalmanAngleRoll = 0.0;
+volatile double kalmanAnglePitch = 0.0;
+volatile double yawAngle = 0.0;
 
 
 // kalman filter: https://github.com/CarbonAeronautics/Part-XV-1DKalmanFilter
-double kalmanAngleRoll = 0.0;
 double kalmanUncertaintyAngleRoll = 2.0 * 2.0;
-double kalmanAnglePitch = 0.0;
 double kalmanUncertaintyAnglePitch = 2.0 * 2.0;
 double kalman1DOutput[] = {0.0, 0.0};
 
@@ -97,27 +95,25 @@ void task3_loop() {
   kalmanOneDimFilter(kalmanAngleRoll, kalmanUncertaintyAngleRoll, mpu6050.getCalibratedRateRoll(), mpu6050.getAngleRollAcc());
   kalmanAngleRoll = kalman1DOutput[0]; 
   kalmanUncertaintyAngleRoll = kalman1DOutput[1];
-  angle_roll = kalmanAngleRoll;
 
   // calc pitch angle
   kalmanOneDimFilter(kalmanAnglePitch, kalmanUncertaintyAnglePitch, mpu6050.getCalibratedRatePitch(), mpu6050.getAnglePitchAcc());
   kalmanAnglePitch = kalman1DOutput[0]; 
   kalmanUncertaintyAnglePitch = kalman1DOutput[1];
-  angle_pitch = kalmanAnglePitch;
 
   // calc yaw angle based on integration; no option to compensate for drift (unless compass sensor is added)
-  angle_yaw += mpu6050.getCalibratedRateYaw() * factor;
+  yawAngle += mpu6050.getCalibratedRateYaw() * factor;
 
 /*
   Serial.print(mpu6050.getAngleRollAcc());  
   Serial.print("\t");
   Serial.print(mpu6050.getAnglePitchAcc());  
   Serial.print("\t");
-  Serial.print(angle_roll);  
+  Serial.print(kalmanAngleRoll);  
   Serial.print("\t");
-  Serial.print(angle_pitch);  
+  Serial.print(kalmanAnglePitch);  
   Serial.print("\t");
-  Serial.print(angle_yaw);  
+  Serial.print(yawAngle);  
   Serial.println();
 */
 
@@ -125,7 +121,7 @@ void task3_loop() {
   gyro_pitch_input = complementaryFilter(gyro_pitch_input, mpu6050.getCalibratedRatePitch());
   gyro_yaw_input = complementaryFilter(gyro_yaw_input, mpu6050.getCalibratedRateYaw());
 
-  pid_yaw_setpoint = -calcPidSetPoint(yawChannel);
+  pid_yaw_setpoint = 0.0;
 
   yawOutputPID.calc(gyro_yaw_input, pid_yaw_setpoint);
 
